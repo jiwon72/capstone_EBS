@@ -69,8 +69,7 @@ npm start
 - [API 통신 프로토콜](docs/mcp_protocol.md)
 - [테스트 가이드](docs/testing.md)
 
-## 라이선스
-MIT License 
+
 
 ## Agents
 
