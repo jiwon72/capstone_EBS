@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  strategy_agent:
+    build:
+      context: .
+      dockerfile: agents/strategy/Dockerfile
+    ports:
+      - "8001:8001"
+    env_file: .env
+    volumes:
+      - ./agents/strategy:/app/agents/strategy
+    depends_on:
+      - database
+
+  risk_agent:
+    build:
+      context: .
+      dockerfile: agents/risk/Dockerfile
+    ports:
+      - "8002:8002"
+    env_file: .env
+    volumes:
+      - ./agents/risk:/app/agents/risk
+    depends_on:
+      - database
+
+  news_agent:
+    build:
+      context: .
+      dockerfile: agents/news/Dockerfile
+    ports:
+      - "8003:8003"
+    env_file: .env
+    volumes:
+      - ./agents/news:/app/agents/news
+    depends_on:
+      - database
+
+  technical_agent:
+    build:
+      context: .
+      dockerfile: agents/technical/Dockerfile
+    ports:
+      - "8004:8004"
+    env_file: .env
+    volumes:
+      - ./agents/technical:/app/agents/technical
+    depends_on:
+      - database
+
+  xai_agent:
+    build:
+      context: .
+      dockerfile: agents/xai/Dockerfile
+    ports:
+      - "8005:8005"
+    env_file: .env
+    volumes:
+      - ./agents/xai:/app/agents/xai
+    depends_on:
+      - database
+
+  trading_agent:
+    build:
+      context: .
+      dockerfile: agents/trading/Dockerfile
+    ports:
+      - "8006:8006"
+    env_file: .env
+    volumes:
+      - ./agents/trading:/app/agents/trading
+    depends_on:
+      - database
+
+  dashboard_backend:
+    build:
+      context: .
+      dockerfile: web_dashboard/backend/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./web_dashboard/backend:/app/web_dashboard/backend
+    depends_on:
+      - database
+      - strategy_agent
+      - risk_agent
+      - news_agent
+      - technical_agent
+      - xai_agent
+      - trading_agent
+
+  dashboard_frontend:
+    build:
+      context: .
+      dockerfile: web_dashboard/frontend/Dockerfile
+    ports:
+      - "3000:3000"
+    env_file: .env
+    volumes:
+      - ./web_dashboard/frontend:/app/web_dashboard/frontend
+    depends_on:
+      - dashboard_backend
+
+  database:
+    image: postgres:13
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: trading_db
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data: 
