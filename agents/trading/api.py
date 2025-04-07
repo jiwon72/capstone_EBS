@@ -13,81 +13,10 @@ import uuid
 from typing import Dict, List, Any
 from decimal import Decimal
 
-app = FastAPI(
-    title="Trading Executor API",
-    description="""
-    Trading Executor API는 주문 실행, 포지션 관리, 포트폴리오 상태 조회 등의 기능을 제공합니다.
-    
-    ## 주요 기능
-    * 주문 실행 (시장가, 지정가, 스탑 주문)
-    * 포지션 업데이트
-    * 주문 취소
-    * 포트폴리오 상태 조회
-    * 리스크 관리
-    
-    ## 사용 방법
-    각 엔드포인트의 자세한 사용 방법은 아래 API 문서를 참고하세요.
-    """,
-    version="1.0.0",
-    contact={
-        "name": "Trading System Team",
-        "email": "trading@example.com"
-    }
-)
-
+app = FastAPI(title="Trading Executor API")
 executor = TradingExecutor()
 
-@app.post(
-    "/execute", 
-    response_model=Dict[str, Any],
-    summary="주문 실행",
-    description="""
-    새로운 주문을 실행합니다. 시장가, 지정가, 스탑 주문을 지원합니다.
-    
-    - 시장가 주문: 현재 시장 가격으로 즉시 실행
-    - 지정가 주문: 지정된 가격 이하(매수) 또는 이상(매도)일 때 실행
-    - 스탑 주문: 지정된 가격에 도달하면 시장가 주문으로 전환
-    
-    리스크 한도를 초과하는 주문은 거부됩니다.
-    """,
-    response_description="실행된 주문의 상세 정보",
-    responses={
-        200: {
-            "description": "주문 실행 성공",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "order_id": "123e4567-e89b-12d3-a456-426614174000",
-                        "status": "FILLED",
-                        "execution_price": 150.0,
-                        "filled_quantity": 100,
-                        "timestamp": "2024-01-01T10:00:00"
-                    }
-                }
-            }
-        },
-        400: {
-            "description": "잘못된 요청 또는 리스크 한도 초과",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Maximum position size exceeded"
-                    }
-                }
-            }
-        },
-        500: {
-            "description": "서버 오류",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Internal server error"
-                    }
-                }
-            }
-        }
-    }
-)
+@app.post("/execute", response_model=Dict[str, Any])
 async def execute_order(request: ExecutionRequest):
     """주문 실행 엔드포인트"""
     try:
@@ -177,35 +106,9 @@ async def execute_order(request: ExecutionRequest):
             "timestamp": datetime.now().isoformat()
         }
 
-@app.post(
-    "/position/update",
-    response_model=PositionUpdateResponse,
-    summary="포지션 업데이트",
-    description="""
-    기존 포지션을 업데이트합니다. 수량 변경, 손절/이익실현 가격 조정 등을 지원합니다.
-    """,
-    response_description="업데이트된 포지션 정보",
-    responses={
-        200: {
-            "description": "포지션 업데이트 성공",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "position_id": "123e4567-e89b-12d3-a456-426614174000",
-                        "ticker": "AAPL",
-                        "quantity": 100,
-                        "entry_price": 150.0,
-                        "current_price": 155.0,
-                        "unrealized_pnl": 500.0,
-                        "status": "OPEN"
-                    }
-                }
-            }
-        }
-    }
-)
+@app.post("/position/update", response_model=PositionUpdateResponse)
 async def update_position(request: PositionUpdateRequest):
-    """포지션 업데이트 엔드포인트"""
+    """포지션을 업데이트합니다."""
     try:
         result = await executor.update_position(request)
         if not isinstance(result, PositionUpdateResponse):
@@ -233,103 +136,44 @@ async def update_position(request: PositionUpdateRequest):
             position=None
         )
 
-@app.post(
-    "/order/cancel",
-    response_model=OrderCancelResponse,
-    summary="주문 취소",
-    description="대기 중인 주문을 취소합니다.",
-    response_description="취소된 주문 정보",
-    responses={
-        200: {
-            "description": "주문 취소 성공",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "order_id": "123e4567-e89b-12d3-a456-426614174000",
-                        "status": "CANCELLED",
-                        "timestamp": "2024-01-01T10:00:00"
-                    }
-                }
-            }
-        }
-    }
-)
-async def cancel_order(request: OrderCancelRequest):
+@app.post("/order/cancel/{order_id}", response_model=Dict[str, Any])
+async def cancel_order(order_id: str):
     """주문 취소 엔드포인트"""
     try:
-        result = await executor.cancel_order(request.order_id)
-        return jsonable_encoder(result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(
-    "/portfolio/status",
-    response_model=PortfolioStatus,
-    summary="포트폴리오 상태 조회",
-    description="""
-    현재 포트폴리오의 상태를 조회합니다. 
-    보유 포지션, 미체결 주문, 손익 현황, 리스크 메트릭스 등의 정보를 제공합니다.
-    """,
-    response_description="포트폴리오 상태 정보",
-    responses={
-        200: {
-            "description": "포트폴리오 상태 조회 성공",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "portfolio_id": "123e4567-e89b-12d3-a456-426614174000",
-                        "total_value": 100000.0,
-                        "cash_balance": 50000.0,
-                        "positions": [
-                            {
-                                "position_id": "123e4567-e89b-12d3-a456-426614174001",
-                                "ticker": "AAPL",
-                                "quantity": 100,
-                                "entry_price": 150.0,
-                                "current_price": 155.0,
-                                "unrealized_pnl": 500.0,
-                                "status": "OPEN"
-                            }
-                        ],
-                        "risk_metrics": {
-                            "var": 1000.0,
-                            "max_drawdown": 2000.0,
-                            "sharpe_ratio": 1.5
-                        }
-                    }
-                }
-            }
+        result = await executor.cancel_order(order_id)
+        return {
+            "status": "success",
+            "message": f"Order {order_id} cancelled successfully",
+            "order_id": order_id,
+            "timestamp": datetime.now().isoformat()
         }
-    }
-)
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "order_id": order_id,
+            "timestamp": datetime.now().isoformat()
+        }
+
+@app.get("/portfolio", response_model=Dict[str, Any])
 async def get_portfolio_status():
-    """포트폴리오 상태 조회 엔드포인트"""
+    """포트폴리오 상태 조회"""
     try:
-        result = await executor.get_portfolio_status()
-        return jsonable_encoder(result)
+        status = await executor.get_portfolio_status()
+        return jsonable_encoder(status)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(
-    "/health",
-    summary="서비스 상태 확인",
-    description="Trading Executor 서비스의 상태를 확인합니다.",
-    response_description="서비스 상태 정보",
-    responses={
-        200: {
-            "description": "서비스 정상 작동 중",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "status": "healthy",
-                        "timestamp": "2024-01-01T10:00:00",
-                        "version": "1.0.0"
-                    }
-                }
-            }
+        print(f"Error in portfolio endpoint: {str(e)}")  # 디버깅을 위한 로그 추가
+        return {
+            "error_message": str(e),
+            "portfolio_id": str(uuid.uuid4()),
+            "total_value": 0.0,
+            "cash_balance": 0.0,
+            "positions": [],
+            "risk_metrics": {},
+            "timestamp": datetime.now().isoformat()
         }
-    }
-)
+
+@app.get("/health")
 async def health_check():
     """서비스 상태 확인"""
     return {

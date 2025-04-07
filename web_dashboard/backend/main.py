@@ -21,75 +21,42 @@ app.add_middleware(
 AGENT_ENDPOINTS = {
     "news": "http://localhost:8003",
     "technical": "http://localhost:8004",
-    "xai": "http://localhost:8006",
-    "trading": "http://localhost:8005"
+    "xai": "http://localhost:8005",
+    "trading": "http://localhost:8006"
 }
 
 # WebSocket 연결을 저장할 딕셔너리
 websocket_connections: Dict[int, WebSocket] = {}
 
-async def fetch_agent_data(url: str, method: str = "GET", data: Dict = None) -> Dict:
-    """에이전트 데이터 조회"""
+async def fetch_agent_data(client: httpx.AsyncClient, agent: str, endpoint: str) -> Dict[str, Any]:
+    """에이전트로부터 데이터를 가져오는 함수"""
     try:
-        async with httpx.AsyncClient() as client:
-            if method == "GET":
-                response = await client.get(url)
-            else:  # POST
-                response = await client.post(url, json=data)
-            return response.json()
+        response = await client.get(f"{AGENT_ENDPOINTS[agent]}/{endpoint}")
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
         return {"error": str(e)}
 
 @app.get("/api/dashboard")
 async def get_dashboard_data():
-    """대시보드 데이터 조회"""
-    try:
-        # 포트폴리오 상태 조회
-        portfolio_data = await fetch_agent_data(f"{AGENT_ENDPOINTS['trading']}/portfolio/status")
-        
-        # 뉴스 분석 결과 조회
-        news_data = await fetch_agent_data(f"{AGENT_ENDPOINTS['news']}/analyze")
-        
-        # 기술적 분석 결과 조회
-        technical_data = await fetch_agent_data(
-            f"{AGENT_ENDPOINTS['technical']}/analyze",
-            method="POST",
-            data={
-                "market_data": [],  # 실제 시장 데이터로 대체 필요
-                "indicators": ["sma", "ema", "rsi", "macd"],
-                "parameters": {
-                    "sma_window": 20,
-                    "ema_window": 20,
-                    "rsi_window": 14
-                }
-            }
-        )
-        
-        # XAI 분석 결과 조회
-        xai_data = await fetch_agent_data(
-            f"{AGENT_ENDPOINTS['xai']}/explain",
-            method="POST",
-            data={
-                "model_id": "trading_model_001",
-                "features": {
-                    "price_momentum": 0.5,
-                    "volume_trend": 0.3,
-                    "sentiment_score": 0.7
-                },
-                "explanation_method": "shap",
-                "num_samples": 1000
-            }
-        )
+    """대시보드 데이터를 가져오는 엔드포인트"""
+    async with httpx.AsyncClient() as client:
+        # 각 에이전트로부터 데이터 수집
+        tasks = [
+            fetch_agent_data(client, "trading", "portfolio"),  # 포트폴리오 상태
+            fetch_agent_data(client, "news", "latest"),       # 최신 뉴스
+            fetch_agent_data(client, "technical", "signals"), # 기술적 분석 신호
+            fetch_agent_data(client, "xai", "summary")       # XAI 요약
+        ]
+        results = await asyncio.gather(*tasks)
         
         return {
-            "portfolio": portfolio_data,
-            "news": news_data,
-            "technical": technical_data,
-            "xai": xai_data,
+            "portfolio": results[0],
+            "news": results[1],
+            "technical": results[2],
+            "xai": results[3],
             "timestamp": datetime.now().isoformat()
         }
-    except Exception as e:
-        return {"error": str(e)}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
