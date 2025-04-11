@@ -10,7 +10,7 @@ import requests
 import yfinance as yf
 from newsapi import NewsApiClient
 from transformers import pipeline
-from .models import (
+from models import (
     NewsSource, NewsCategory, SentimentScore,
     NewsArticle, EntityMention, MarketImpact,
     NewsAnalysis, NewsAnalysisRequest, NewsAnalysisResponse
@@ -18,94 +18,194 @@ from .models import (
 
 class NewsAnalyzer:
     def __init__(self, is_test: bool = False):
-        # 테스트 환경에서는 더미 API 키 사용
-        news_api_key = "test_key" if is_test else os.getenv("NEWS_API_KEY", "your-news-api-key")
-        self.news_api = NewsApiClient(api_key=news_api_key)
-        self.sentiment_analyzer = pipeline("sentiment-analysis")
+        """뉴스 분석기 초기화"""
+        # News API 키 설정
+        news_api_key = os.getenv('NEWS_API_KEY', "04942b7e848547bc9a08c9d50cb688ff")
+        if is_test:
+            news_api_key = "test_key"
+            
+        self.newsapi = NewsApiClient(api_key=news_api_key)
         
-        # 테스트 환경에서는 OpenAI 클라이언트 초기화하지 않음
+        # 주요 한국 기업 및 산업 키워드 설정
+        self.market_keywords = {
+            'general_market': ['코스피', 'KOSPI', '코스닥', 'KOSDAQ', '한국거래소', 'KRX'],
+            'industries': ['반도체', '전기차', 'EV', '2차전지', '바이오', '제약', '금융', '자동차', 'IT'],
+            'major_companies': ['삼성전자', 'SK하이닉스', 'LG에너지솔루션', '삼성바이오로직스', '삼성SDI', 
+                              'LG화학', '현대차', '기아', '네이버', '카카오']
+        }
+        
+        # OpenAI 클라이언트 초기화
         if not is_test:
             self.openai_client = openai.OpenAI()
         else:
             self.openai_client = None
         
-    def _fetch_news_articles(
-        self,
-        tickers: List[str],
-        time_range: str,
-        sources: Optional[List[NewsSource]] = None,
-        categories: Optional[List[NewsCategory]] = None
-    ) -> List[NewsArticle]:
+        self.sentiment_analyzer = pipeline("sentiment-analysis", model="snunlp/KR-FinBert-SC")
+        
+    def _fetch_news_articles(self, time_range: str = "1d") -> List[NewsArticle]:
         """뉴스 기사 수집"""
         articles = []
         
-        # 시간 범위 계산
+        # 시간 범위 설정
+        end_date = datetime.now()
         if time_range == "1d":
-            from_date = datetime.now() - timedelta(days=1)
+            start_date = end_date - timedelta(days=1)
         elif time_range == "7d":
-            from_date = datetime.now() - timedelta(days=7)
+            start_date = end_date - timedelta(days=7)
         else:  # 30d
-            from_date = datetime.now() - timedelta(days=30)
+            start_date = end_date - timedelta(days=30)
             
-        # NewsAPI를 통한 뉴스 수집
-        for ticker in tickers:
-            company = yf.Ticker(ticker)
-            company_name = company.info.get('longName', ticker)
-            
-            news = self.news_api.get_everything(
-                q=f"{company_name} OR {ticker}",
-                from_param=from_date.strftime('%Y-%m-%d'),
-                language='en',
-                sort_by='relevancy'
+        try:
+            # 1. 한국 비즈니스 뉴스 (top-headlines)
+            kr_response = self.newsapi.get_top_headlines(
+                country='kr',
+                category='business'
             )
             
-            for article in news['articles']:
-                # 기사 관련성 및 감성 분석
-                relevance_score = self._calculate_relevance_score(article['title'], article['description'], ticker)
-                sentiment = self._analyze_sentiment(article['title'], article['description'])
-                
-                # 카테고리 분류
-                category = self._classify_news_category(article['title'], article['description'])
-                
-                if sources and NewsSource(article['source']['name'].lower()) not in sources:
+            if kr_response.get('status') == 'ok':
+                print(f"Found {len(kr_response.get('articles', []))} Korean business headlines")
+                self._process_articles(kr_response.get('articles', []), articles, start_date, 'MARKET')
+            
+            # 2. 산업별/기업별 뉴스 (everything)
+            search_terms = (
+                self.market_keywords['general_market'] +
+                self.market_keywords['industries'] +
+                self.market_keywords['major_companies']
+            )
+            
+            for term in search_terms:
+                try:
+                    response = self.newsapi.get_everything(
+                        q=term,
+                        from_param=start_date.strftime("%Y-%m-%d"),
+                        to=end_date.strftime("%Y-%m-%d"),
+                        sort_by='relevancy'
+                    )
+                    
+                    if response.get('status') == 'ok':
+                        print(f"Found {len(response.get('articles', []))} articles for term: {term}")
+                        self._process_articles(response.get('articles', []), articles, start_date, term)
+                        
+                except Exception as e:
+                    print(f"Error fetching news for term {term}: {str(e)}")
                     continue
                     
-                if categories and category not in categories:
+        except Exception as e:
+            print(f"Error fetching news: {str(e)}")
+            
+        print(f"Final filtered articles count: {len(articles)}")
+        return articles
+        
+    def _process_articles(self, raw_articles: List[Dict], articles: List[NewsArticle], 
+                         start_date: datetime, category: str) -> None:
+        """기사 처리 및 필터링"""
+        for article in raw_articles:
+            try:
+                # 필수 필드 확인
+                if not all(field in article for field in ['title', 'url', 'publishedAt']):
+                    print(f"Skipping article due to missing fields: {article.get('title', 'No title')}")
+                    continue
+                    
+                # 발행일 확인
+                published_at = datetime.strptime(article['publishedAt'], "%Y-%m-%dT%H:%M:%SZ")
+                if published_at < start_date:
+                    print(f"Skipping article due to old date: {article['title']}")
                     continue
                 
-                articles.append(NewsArticle(
+                # 기사 소스 매핑
+                source_name = article.get('source', {}).get('name', '').lower()
+                source = self._map_source(source_name)
+                
+                # 내용이 없는 경우 description으로 대체
+                content = article.get('content', '') or article.get('description', '')
+                if not content:
+                    print(f"Skipping article due to no content: {article['title']}")
+                    continue
+                
+                # 관련성 점수 계산
+                relevance_score = self._calculate_relevance_score(
+                    article['title'],
+                    content,
+                    category
+                )
+                
+                # 기사 추가 (관련성 점수 필터링은 analyze_news에서 수행)
+                news_article = NewsArticle(
                     article_id=str(uuid.uuid4()),
                     title=article['title'],
-                    content=article['description'],
-                    source=NewsSource(article['source']['name'].lower()),
                     url=article['url'],
-                    published_at=datetime.strptime(article['publishedAt'], '%Y-%m-%dT%H:%M:%SZ'),
-                    category=category,
-                    tickers=[ticker],
-                    sentiment=sentiment,
-                    relevance_score=relevance_score
-                ))
+                    source=source,
+                    published_at=published_at,
+                    content=content,
+                    relevance_score=relevance_score,
+                    tickers=[]  # 추후 티커 매핑 기능 추가
+                )
+                articles.append(news_article)
+                print(f"Added article: {article['title']} (relevance: {relevance_score:.2f})")
+                    
+            except Exception as e:
+                print(f"Error processing article: {str(e)}")
+                continue
                 
-        return articles
-    
-    def _calculate_relevance_score(self, title: str, content: str, ticker: str) -> float:
-        """기사 관련성 점수 계산"""
-        # 간단한 관련성 점수 계산 로직
-        text = f"{title} {content}".lower()
-        ticker_count = text.count(ticker.lower())
-        company = yf.Ticker(ticker)
-        company_name = company.info.get('longName', '').lower()
-        company_count = text.count(company_name)
+    def _map_source(self, source_name: str) -> NewsSource:
+        """뉴스 소스 매핑"""
+        source_mapping = {
+            'reuters': NewsSource.REUTERS,
+            'bloomberg': NewsSource.BLOOMBERG,
+            'cnbc': NewsSource.CNBC,
+            'financial times': NewsSource.FINANCIAL_TIMES,
+            'ft.com': NewsSource.FINANCIAL_TIMES,
+            'wall street journal': NewsSource.WALL_STREET_JOURNAL,
+            'wsj': NewsSource.WALL_STREET_JOURNAL
+        }
         
-        score = min((ticker_count + company_count) / 10, 1.0)
-        return score
+        for key, value in source_mapping.items():
+            if key in source_name:
+                return value
+        return NewsSource.OTHER
+        
+    def _calculate_relevance_score(self, title: str, content: str, category: str) -> float:
+        """기사 관련성 점수 계산"""
+        text = f"{title} {content}".lower()
+        
+        # 카테고리별 키워드 매칭
+        if category == 'MARKET':
+            keywords = self.market_keywords['general_market']
+        elif category in self.market_keywords['industries']:
+            keywords = [category]
+        elif category in self.market_keywords['major_companies']:
+            keywords = [category]
+        else:
+            # KOSPI/KOSDAQ 관련 키워드
+            if category in ['KOSPI', 'KOSDAQ', 'KRX']:
+                keywords = self.market_keywords['general_market']
+            # 산업 관련 영문 키워드
+            elif category == 'EV':
+                keywords = ['전기차', 'EV', '전기자동차']
+            elif category == 'IT':
+                keywords = ['IT', '기술', '소프트웨어', '인터넷']
+            else:
+                keywords = [category]
+        
+        # 키워드 매칭 점수 계산
+        matches = 0
+        for keyword in keywords:
+            if keyword.lower() in text:
+                # 제목에서 발견되면 더 높은 점수
+                if keyword.lower() in title.lower():
+                    matches += 1.5
+                else:
+                    matches += 1.0
+        
+        # 최종 점수 계산 (0.3 이상이면 관련 기사로 판단)
+        score = matches / (len(keywords) * 1.5) if keywords else 0
+        return min(max(score, 0.3), 1.0)  # 최소 0.3, 최대 1.0
     
     def _analyze_sentiment(self, title: str, content: str) -> SentimentScore:
         """감성 분석"""
         text = f"{title} {content}"
         result = self.sentiment_analyzer(text)[0]
         
-        # 감성 점수를 SentimentScore로 변환
         score = result['score']
         if result['label'] == 'POSITIVE':
             if score > 0.8:
@@ -121,303 +221,233 @@ class NewsAnalyzer:
         """뉴스 카테고리 분류"""
         text = f"{title} {content}".lower()
         
-        # 간단한 규칙 기반 분류
-        if any(word in text for word in ['earnings', 'revenue', 'profit', 'loss']):
+        if any(word in text for word in ['earnings', 'revenue', 'profit']):
             return NewsCategory.EARNINGS
-        elif any(word in text for word in ['merger', 'acquisition', 'takeover']):
+        elif any(word in text for word in ['merger', 'acquisition', 'M&A']):
             return NewsCategory.MERGER_ACQUISITION
         elif any(word in text for word in ['market', 'index', 'trading']):
             return NewsCategory.MARKET_MOVEMENT
         elif any(word in text for word in ['gdp', 'inflation', 'employment']):
             return NewsCategory.ECONOMIC_INDICATOR
-        elif any(word in text for word in ['regulation', 'compliance', 'sec']):
+        elif any(word in text for word in ['regulation', 'sec', 'law']):
             return NewsCategory.REGULATORY_NEWS
         elif any(word in text for word in ['industry', 'sector']):
             return NewsCategory.INDUSTRY_NEWS
-        elif any(word in text for word in ['geopolitical', 'political', 'government']):
+        elif any(word in text for word in ['government', 'policy', 'political']):
             return NewsCategory.GEOPOLITICAL
         else:
             return NewsCategory.COMPANY_NEWS
     
     def _extract_entities(self, article: NewsArticle) -> List[EntityMention]:
-        """엔티티 추출 및 분석"""
-        prompt = f"""
-        Extract key entities from the following news article and analyze their sentiment:
-        Title: {article.title}
-        Content: {article.content}
-        
-        Return the entities with their types (COMPANY, PERSON, LOCATION) and sentiment.
-        """
-        
-        response = self.openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        # GPT 응답 파싱 및 엔티티 생성
+        """엔티티 추출"""
         entities = []
-        # 실제 구현에서는 GPT 응답을 파싱하여 EntityMention 객체 생성
-        
         return entities
     
-    def _analyze_market_impact(
-        self,
-        article: NewsArticle,
-        entities: List[EntityMention]
-    ) -> MarketImpact:
+    def _analyze_market_impact(self, article: NewsArticle, entities: List[EntityMention]) -> MarketImpact:
         """시장 영향 분석"""
-        prompt = f"""
-        Analyze the potential market impact of the following news:
-        Title: {article.title}
-        Content: {article.content}
-        Category: {article.category}
-        Sentiment: {article.sentiment}
+        # 기사 내용에서 영향받는 섹터 분석
+        affected_sectors = []
+        text = f"{article.title} {article.content}".lower()
         
-        Consider:
-        1. Impact level (-1 to 1)
-        2. Affected sectors
-        3. Time horizon
-        4. Key drivers
-        """
+        # 산업 키워드 매칭
+        sector_keywords = {
+            "TECHNOLOGY": ["반도체", "it", "소프트웨어", "인공지능", "ai", "클라우드"],
+            "ENERGY": ["2차전지", "배터리", "전기차", "ev", "신재생에너지"],
+            "FINANCE": ["금융", "은행", "보험", "증권", "투자"],
+            "HEALTHCARE": ["바이오", "제약", "의료", "healthcare"],
+            "AUTO": ["자동차", "모빌리티", "완성차"],
+            "RETAIL": ["유통", "소매", "이커머스", "retail"]
+        }
         
-        response = self.openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}]
-        )
+        for sector, keywords in sector_keywords.items():
+            if any(keyword in text for keyword in keywords):
+                affected_sectors.append(sector)
         
-        # GPT 응답 파싱 및 MarketImpact 객체 생성
-        # 실제 구현에서는 더 정교한 파싱 로직 필요
+        if not affected_sectors:
+            affected_sectors = ["GENERAL_MARKET"]
+        
         impact = MarketImpact(
             impact_level=0.5,
             confidence_score=0.8,
-            affected_sectors=["TECHNOLOGY"],
-            affected_tickers=article.tickers,
+            affected_sectors=affected_sectors,
+            affected_tickers=[],  # 티커 정보는 비워둠
             time_horizon="SHORT_TERM",
-            key_drivers=["Market Sentiment", "Company Performance"]
+            key_drivers=["Market Sentiment"]
         )
-        
         return impact
+    
+    def _calculate_overall_sentiment(self, articles: List[NewsArticle]) -> str:
+        """
+        전체 뉴스 기사의 감성을 분석하여 종합적인 감성 점수를 반환합니다.
+        """
+        if not articles:
+            return "neutral"
+            
+        sentiment_scores = {
+            "very_positive": 2,
+            "positive": 1,
+            "neutral": 0,
+            "negative": -1,
+            "very_negative": -2
+        }
+        
+        total_score = 0
+        count = 0
+        
+        for article in articles:
+            if article.sentiment in sentiment_scores:
+                total_score += sentiment_scores[article.sentiment]
+                count += 1
+        
+        if count == 0:
+            return "neutral"
+            
+        avg_score = total_score / count
+        
+        if avg_score >= 1.5:
+            return "very_positive"
+        elif avg_score >= 0.5:
+            return "positive"
+        elif avg_score > -0.5:
+            return "neutral"
+        elif avg_score > -1.5:
+            return "negative"
+        else:
+            return "very_negative"
+    
+    def _calculate_average_sentiment(self, articles: List[NewsArticle]) -> float:
+        """
+        전체 뉴스 기사의 평균 감성 점수를 계산합니다.
+        """
+        if not articles:
+            return 0.0
+            
+        sentiment_scores = {
+            "very_positive": 1.0,
+            "positive": 0.5,
+            "neutral": 0.0,
+            "negative": -0.5,
+            "very_negative": -1.0
+        }
+        
+        total_score = 0.0
+        valid_articles = 0
+        
+        for article in articles:
+            if article.sentiment in sentiment_scores:
+                total_score += sentiment_scores[article.sentiment]
+                valid_articles += 1
+        
+        return total_score / valid_articles if valid_articles > 0 else 0.0
     
     def analyze_news(self, request: NewsAnalysisRequest) -> NewsAnalysisResponse:
         """뉴스 분석 메인 로직"""
-        # 1. 뉴스 기사 수집
-        articles = self._fetch_news_articles(
-            request.tickers,
-            request.time_range,
-            request.sources,
-            request.categories
-        )
+        articles = []
         
-        # 2. 각 기사 분석
+        try:
+            # 1. 한국 비즈니스 뉴스 (top-headlines)
+            kr_response = self.newsapi.get_top_headlines(
+                country='kr',
+                category='business',
+                page_size=100
+            )
+            
+            if kr_response.get('status') == 'ok':
+                print(f"Found {len(kr_response.get('articles', []))} Korean business headlines")
+                self._process_articles(kr_response.get('articles', []), articles, 
+                                    datetime.now() - timedelta(days=7), 'MARKET')
+            
+            # 2. 글로벌 비즈니스 뉴스
+            global_response = self.newsapi.get_top_headlines(
+                category='business',
+                page_size=100
+            )
+            
+            if global_response.get('status') == 'ok':
+                print(f"Found {len(global_response.get('articles', []))} global business headlines")
+                self._process_articles(global_response.get('articles', []), articles, 
+                                    datetime.now() - timedelta(days=7), 'MARKET')
+            
+            # 3. 기업/산업별 뉴스 검색
+            search_terms = (
+                self.market_keywords['major_companies'] +
+                [f"{term} korea" for term in self.market_keywords['major_companies']] +
+                self.market_keywords['industries'] +
+                [f"{term} korea" for term in self.market_keywords['industries']]
+            )
+            
+            for term in search_terms:
+                try:
+                    response = self.newsapi.get_everything(
+                        q=term,
+                        from_param=(datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d"),
+                        to=datetime.now().strftime("%Y-%m-%d"),
+                        sort_by='relevancy',
+                        page_size=100
+                    )
+                    
+                    if response.get('status') == 'ok':
+                        print(f"Found {len(response.get('articles', []))} articles for term: {term}")
+                        self._process_articles(response.get('articles', []), articles, 
+                                            datetime.now() - timedelta(days=7), term)
+                        
+                except Exception as e:
+                    print(f"Error fetching news for term {term}: {str(e)}")
+                    continue
+                    
+        except Exception as e:
+            print(f"Error fetching news: {str(e)}")
+            
+        print(f"Total articles found before filtering: {len(articles)}")
+        
+        # 중복 제거 (URL 기준)
+        unique_articles = {article.url: article for article in articles}.values()
+        filtered_articles = list(unique_articles)
+        
+        print(f"Articles after removing duplicates: {len(filtered_articles)}")
+        
+        # 관련성 점수로 필터링
+        filtered_articles = [
+            article for article in filtered_articles 
+            if article.relevance_score >= request.min_relevance_score
+        ]
+        
+        print(f"Articles after relevance filtering: {len(filtered_articles)}")
+        
+        # 분석 수행
         analyzed_articles = []
-        for article in articles:
-            if article.relevance_score < request.min_relevance_score:
-                continue
-                
-            # 엔티티 추출
+        for article in filtered_articles[:50]:  # 상위 50개만 분석
             entities = self._extract_entities(article)
-            
-            # 시장 영향 분석
             market_impact = self._analyze_market_impact(article, entities)
+            sentiment = self._analyze_sentiment(article.title, article.content)
+            category = self._classify_news_category(article.title, article.content)
             
-            # 분석 결과 생성
             analysis = NewsAnalysis(
                 article=article,
                 entities=entities,
                 market_impact=market_impact,
-                key_takeaways=self._generate_key_takeaways(article, market_impact),
-                trading_signals=self._generate_trading_signals(article, market_impact)
+                sentiment=sentiment,
+                category=category,
+                key_takeaways=[],
+                trading_signals=[]
             )
             analyzed_articles.append(analysis)
         
-        # 3. 전체 분석 결과 생성
         return NewsAnalysisResponse(
+            request_timestamp=datetime.now(),
+            ticker=request.tickers[0] if request.tickers else "",
+            articles=filtered_articles,
             analyzed_articles=analyzed_articles,
             overall_sentiment=self._calculate_overall_sentiment(analyzed_articles),
-            major_events=self._extract_major_events(analyzed_articles),
-            trading_implications=self._generate_trading_implications(analyzed_articles),
-            risk_factors=self._identify_risk_factors(analyzed_articles),
-            summary=self._generate_summary(analyzed_articles)
+            aggregated_sentiment=self._calculate_overall_sentiment(analyzed_articles),
+            average_sentiment_score=self._calculate_average_sentiment(analyzed_articles),
+            major_events=[],
+            trading_implications=[],
+            risk_factors=[],
+            summary="News analysis completed",
+            key_findings=f"Found {len(analyzed_articles)} relevant articles"
         )
-    
-    def _generate_key_takeaways(
-        self,
-        article: NewsArticle,
-        market_impact: MarketImpact
-    ) -> List[str]:
-        """주요 시사점 생성"""
-        prompt = f"""
-        Generate key takeaways from the following news:
-        Title: {article.title}
-        Content: {article.content}
-        Impact: {market_impact.impact_level}
-        """
-        
-        response = self.openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        # 실제 구현에서는 GPT 응답을 파싱하여 key takeaways 리스트 생성
-        return ["Market sentiment is positive", "Strong growth potential"]
-    
-    def _generate_trading_signals(
-        self,
-        article: NewsArticle,
-        market_impact: MarketImpact
-    ) -> List[Dict]:
-        """트레이딩 신호 생성"""
-        signals = []
-        
-        if market_impact.impact_level > 0.5:
-            signals.append({
-                "ticker": article.tickers[0],
-                "action": "BUY",
-                "confidence": market_impact.confidence_score,
-                "reason": "Strong positive news impact"
-            })
-        elif market_impact.impact_level < -0.5:
-            signals.append({
-                "ticker": article.tickers[0],
-                "action": "SELL",
-                "confidence": market_impact.confidence_score,
-                "reason": "Strong negative news impact"
-            })
-            
-        return signals
-    
-    def _calculate_overall_sentiment(self, analyses: List[NewsAnalysis]) -> SentimentScore:
-        """전체 감성 수준 계산"""
-        if not analyses:
-            return SentimentScore.NEUTRAL
-            
-        sentiment_scores = {
-            SentimentScore.VERY_NEGATIVE: -2,
-            SentimentScore.NEGATIVE: -1,
-            SentimentScore.NEUTRAL: 0,
-            SentimentScore.POSITIVE: 1,
-            SentimentScore.VERY_POSITIVE: 2
-        }
-        
-        weighted_sum = sum(
-            sentiment_scores[a.sentiment] * 0.8  # 가중치 대신 임의의 값 사용
-            for a in analyses
-        )
-        total_weight = len(analyses) * 0.8  # 가중치의 합
-        
-        avg_score = weighted_sum / total_weight if total_weight > 0 else 0
-        
-        if avg_score > 1:
-            return SentimentScore.VERY_POSITIVE
-        elif avg_score > 0:
-            return SentimentScore.POSITIVE
-        elif avg_score < -1:
-            return SentimentScore.VERY_NEGATIVE
-        elif avg_score < 0:
-            return SentimentScore.NEGATIVE
-        else:
-            return SentimentScore.NEUTRAL
-    
-    def _extract_major_events(self, analyses: List[NewsAnalysis]) -> List[Dict]:
-        """주요 이벤트 추출"""
-        events = []
-        for analysis in analyses:
-            if analysis.market_impact.impact_level > 0.7 or analysis.market_impact.impact_level < -0.7:
-                events.append({
-                    "title": analysis.article.title,
-                    "category": analysis.article.category,
-                    "impact_level": analysis.market_impact.impact_level,
-                    "affected_tickers": analysis.market_impact.affected_tickers
-                })
-        return events
-    
-    def _generate_trading_implications(self, analyses: List[NewsAnalysis]) -> List[Dict]:
-        """트레이딩 시사점 생성"""
-        implications = []
-        for analysis in analyses:
-            implications.extend(analysis.trading_signals)
-        return implications
-    
-    def _identify_risk_factors(self, analyses: List[NewsAnalysis]) -> List[Dict]:
-        """리스크 요인 식별"""
-        risk_factors = []
-        for analysis in analyses:
-            if analysis.market_impact.impact_level < -0.3:
-                risk_factors.append({
-                    "factor": analysis.article.title,
-                    "severity": abs(analysis.market_impact.impact_level),
-                    "affected_sectors": analysis.market_impact.affected_sectors,
-                    "time_horizon": analysis.market_impact.time_horizon
-                })
-        return risk_factors
-    
-    def _generate_summary(self, analyses: List[NewsAnalysis]) -> str:
-        """전체 분석 결과 요약"""
-        if not analyses:
-            return "No relevant news articles found."
-            
-        summary = f"Analyzed {len(analyses)} news articles.\n\n"
-        
-        # 주요 이벤트 요약
-        major_events = self._extract_major_events(analyses)
-        if major_events:
-            summary += "Major Events:\n"
-            for event in major_events[:3]:  # Top 3 events
-                summary += f"- {event['title']}\n"
-                
-        # 전체 감성
-        overall_sentiment = self._calculate_overall_sentiment(analyses)
-        summary += f"\nOverall Market Sentiment: {overall_sentiment.value}\n"
-        
-        # 트레이딩 시사점
-        implications = self._generate_trading_implications(analyses)
-        if implications:
-            summary += "\nKey Trading Implications:\n"
-            for imp in implications[:3]:  # Top 3 implications
-                summary += f"- {imp['action']} {imp['ticker']}: {imp['reason']}\n"
-                
-        return summary
 
     async def analyze(self, request: NewsAnalysisRequest) -> NewsAnalysisResponse:
         """뉴스 분석을 수행하고 결과를 반환합니다."""
-        # TODO: 실제 뉴스 분석 로직 구현
-        # 현재는 더미 데이터를 반환
-        
-        article = NewsArticle(
-            article_id=str(uuid.uuid4()),
-            title="Sample News Article",
-            content="This is a sample news article content for testing purposes.",
-            source=NewsSource.REUTERS,
-            url="https://example.com/news/1",
-            published_at=datetime.now() - timedelta(hours=1),
-            author="John Doe",
-            categories=["Finance", "Technology"],
-            tickers=[request.ticker]
-        )
-        
-        analysis = NewsAnalysis(
-            article=article,
-            sentiment=SentimentScore.POSITIVE,
-            sentiment_score=0.75,
-            key_topics=["Earnings", "Growth", "Innovation"],
-            named_entities={
-                "COMPANY": [request.ticker],
-                "PERSON": ["John Doe"],
-                "LOCATION": ["New York"]
-            },
-            summary="Positive news about company's performance",
-            impact_analysis={
-                "market_impact": "POSITIVE",
-                "confidence": 0.8,
-                "factors": ["Strong earnings", "Market expansion"]
-            }
-        )
-        
-        return NewsAnalysisResponse(
-            ticker=request.ticker,
-            articles=[article],
-            analysis=[analysis],
-            aggregated_sentiment=SentimentScore.POSITIVE,
-            average_sentiment_score=0.75,
-            key_findings="Overall positive sentiment based on recent news coverage."
-        )
+        return self.analyze_news(request)
