@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
 from enum import Enum
 from datetime import datetime
+import uuid
 
 class NewsSource(str, Enum):
     REUTERS = "reuters"
@@ -29,55 +30,54 @@ class NewsCategory(str, Enum):
     GEOPOLITICAL = "geopolitical"
 
 class NewsArticle(BaseModel):
-    article_id: str
+    article_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     title: str
-    content: str
-    source: NewsSource
     url: str
+    source: NewsSource = NewsSource.OTHER
     published_at: datetime
-    author: Optional[str] = None
-    categories: List[str] = []
+    content: str
+    relevance_score: float = 1.0
     tickers: List[str] = []
-    metadata: Optional[Dict[str, Any]] = None
+    category: Optional[NewsCategory] = None
+    sentiment: Optional[SentimentScore] = None
 
 class EntityMention(BaseModel):
     entity: str
-    entity_type: str  # COMPANY, PERSON, LOCATION, etc.
+    entity_type: str
     sentiment: SentimentScore
     mentions_count: int
     context_snippets: List[str]
 
 class MarketImpact(BaseModel):
-    impact_level: float = Field(..., ge=-1, le=1)  # -1 (very negative) to 1 (very positive)
-    confidence_score: float = Field(..., ge=0, le=1)
+    impact_level: float
+    confidence_score: float
     affected_sectors: List[str]
     affected_tickers: List[str]
-    time_horizon: str  # SHORT_TERM, MEDIUM_TERM, LONG_TERM
+    time_horizon: str
     key_drivers: List[str]
 
 class NewsAnalysis(BaseModel):
     article: NewsArticle
-    sentiment: SentimentScore
-    sentiment_score: float = Field(..., ge=-1.0, le=1.0)
-    key_topics: List[str]
-    named_entities: Dict[str, List[str]]
-    summary: str
-    impact_analysis: Dict[str, Any]
-    timestamp: datetime = Field(default_factory=datetime.now)
+    entities: List[EntityMention]
+    market_impact: MarketImpact
+    key_takeaways: List[str]
+    trading_signals: List[Dict]
 
 class NewsAnalysisRequest(BaseModel):
-    ticker: str
-    start_date: Optional[datetime] = None
-    end_date: Optional[datetime] = None
-    sources: Optional[List[NewsSource]] = None
-    limit: int = Field(10, ge=1, le=100)
+    tickers: List[str]
+    time_range: str = "1d"
+    min_relevance_score: float = 0.3
 
 class NewsAnalysisResponse(BaseModel):
-    request_timestamp: datetime = Field(default_factory=datetime.now)
+    request_timestamp: datetime
     ticker: str
     articles: List[NewsArticle]
-    analysis: List[NewsAnalysis]
+    analyzed_articles: List[NewsAnalysis]
+    overall_sentiment: SentimentScore
     aggregated_sentiment: SentimentScore
     average_sentiment_score: float
-    key_findings: str
-    metadata: Optional[Dict[str, Any]] = None 
+    major_events: List[Dict]
+    trading_implications: List[Dict]
+    risk_factors: List[Dict]
+    summary: str
+    key_findings: str 
