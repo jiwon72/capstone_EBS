@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="900" height="700" viewBox="0 0 900 700">
+  <style>
+    .box { fill: white; stroke: #333; stroke-width: 2; }
+    .agent { fill: #f9f; stroke: #333; stroke-width: 2; }
+    .data { fill: #bbf; stroke: #333; stroke-width: 1; }
+    .output { fill: #bfb; stroke: #333; stroke-width: 1; }
+    .model { fill: #fbb; stroke: #333; stroke-width: 1; }
+    .arrow { stroke: #333; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead); }
+    .text { font-family: Arial; font-size: 14px; text-anchor: middle; }
+    .title { font-family: Arial; font-size: 20px; font-weight: bold; text-anchor: middle; }
+    .subtitle { font-family: Arial; font-size: 14px; text-anchor: middle; }
+  </style>
+  
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333" />
+    </marker>
+  </defs>
+  
+  <text x="450" y="30" class="title">투자 의사결정 에이전트 시스템 플로우차트</text>
+  <text x="450" y="55" class="subtitle">Agent Flow for Investment Decision Making</text>
+  
+  <!-- News Data -->
+  <rect x="50" y="100" width="150" height="60" rx="5" class="data" />
+  <text x="125" y="130" class="text">뉴스 데이터</text>
+  <text x="125" y="150" class="text">(News Data)</text>
+  
+  <!-- News Agent -->
+  <rect x="50" y="200" width="150" height="60" rx="5" class="agent" />
+  <text x="125" y="235" class="text">News Agent</text>
+  
+  <!-- News Output -->
+  <rect x="50" y="300" width="150" height="60" rx="5" class="output" />
+  <text x="125" y="330" class="text">뉴스 분석 Output</text>
+  
+  <!-- Strategy Agent -->
+  <rect x="300" y="200" width="150" height="60" rx="5" class="agent" />
+  <text x="375" y="235" class="text">Strategy Agent</text>
+  
+  <!-- Strategy Output -->
+  <rect x="300" y="300" width="150" height="80" rx="5" class="output" />
+  <text x="375" y="330" class="text">투자 전략 Output</text>
+  <text x="375" y="350" class="text">- 종목 설정</text>
+  <text x="375" y="370" class="text">- 포트폴리오 구성</text>
+  
+  <!-- Risk Agent -->
+  <rect x="200" y="420" width="150" height="60" rx="5" class="agent" />
+  <text x="275" y="455" class="text">Risk Agent</text>
+  
+  <!-- Technical Agent -->
+  <rect x="400" y="420" width="150" height="60" rx="5" class="agent" />
+  <text x="475" y="455" class="text">Technical Agent</text>
+  
+  <!-- Time Series Model -->
+  <rect x="600" y="370" width="150" height="60" rx="5" class="model" />
+  <text x="675" y="405" class="text">시계열 모델</text>
+  
+  <!-- Risk Output -->
+  <rect x="200" y="520" width="150" height="60" rx="5" class="output" />
+  <text x="275" y="550" class="text">리스크 분석 Output</text>
+  
+  <!-- Technical Output -->
+  <rect x="400" y="520" width="150" height="60" rx="5" class="output" />
+  <text x="475" y="550" class="text">기술적 분석 Output</text>
+  
+  <!-- Final Decision Agent -->
+  <rect x="300" y="620" width="150" height="60" rx="5" class="agent" />
+  <text x="375" y="655" class="text">Final Decision Agent</text>
+  
+  <!-- Final Output -->
+  <rect x="500" y="620" width="150" height="60" rx="5" class="output" />
+  <text x="575" y="650" class="text">최종 투자 의사결정</text>
+  
+  <!-- Arrows -->
+  <!-- News flow -->
+  <path d="M125 160 L125 200" class="arrow" />
+  <path d="M125 260 L125 300" class="arrow" />
+  <path d="M200 330 L300 230" class="arrow" />
+  
+  <!-- Strategy flow -->
+  <path d="M375 260 L375 300" class="arrow" />
+  <path d="M330 380 L275 420" class="arrow" />
+  <path d="M420 380 L475 420" class="arrow" />
+  
+  <!-- Risk and Technical flow -->
+  <path d="M275 480 L275 520" class="arrow" />
+  <path d="M475 480 L475 520" class="arrow" />
+  <path d="M600 400 L550 420" class="arrow" />
+  
+  <!-- Final decision flow -->
+  <path d="M275 580 L350 620" class="arrow" />
+  <path d="M475 580 L400 620" class="arrow" />
+  <path d="M375 340 L550 620" stroke-dasharray="5,5" class="arrow" />
+  <path d="M450 650 L500 650" class="arrow" />
+  
+  <!-- Legend -->
+  <rect x="700" y="100" width="20" height="20" class="agent" />
+  <text x="730" y="115" style="font-family: Arial; font-size: 12px; text-anchor: start;">에이전트 (Agent)</text>
+  
+  <rect x="700" y="130" width="20" height="20" class="data" />
+  <text x="730" y="145" style="font-family: Arial; font-size: 12px; text-anchor: start;">데이터 (Data)</text>
+  
+  <rect x="700" y="160" width="20" height="20" class="output" />
+  <text x="730" y="175" style="font-family: Arial; font-size: 12px; text-anchor: start;">결과물 (Output)</text>
+  
+  <rect x="700" y="190" width="20" height="20" class="model" />
+  <text x="730" y="205" style="font-family: Arial; font-size: 12px; text-anchor: start;">모델 (Model)</text>
+</svg>
