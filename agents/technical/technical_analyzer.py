@@ -91,6 +91,10 @@ class TechnicalAnalyzer:
             # Convert market data to numpy array
             prices = np.array([data.close for data in request.market_data])
             
+            # Check if data length is sufficient
+            if len(prices) < max(request.window_sizes):
+                raise ValueError("데이터 길이가 충분하지 않습니다.")
+            
             sma_values = {}
             ema_values = {}
             
@@ -121,6 +125,10 @@ class TechnicalAnalyzer:
 
     def _calculate_oscillators(self, df: pd.DataFrame) -> Oscillators:
         """오실레이터 계산"""
+        # Check if data length is sufficient
+        if len(df) < 14:
+            raise ValueError("데이터 길이가 충분하지 않습니다.")
+        
         # RSI
         rsi_14 = self._convert_nan_to_none(talib.RSI(df['Close'], timeperiod=14)[-1])
         
@@ -183,6 +191,10 @@ class TechnicalAnalyzer:
     
     def _calculate_volume_indicators(self, df: pd.DataFrame) -> VolumeIndicators:
         """거래량 지표 계산"""
+        # Check if data length is sufficient
+        if len(df) < 20:
+            raise ValueError("데이터 길이가 충분하지 않습니다.")
+        
         # On Balance Volume
         obv = self._convert_nan_to_none(talib.OBV(df['Close'], df['Volume'])[-1])
         
@@ -575,10 +587,8 @@ class TechnicalAnalyzer:
             signals = {}
             for signal_type in request.signal_types:
                 if signal_type in ["trend_following", "mean_reversion", "breakout"]:
-                    signals[signal_type] = Signal(
-                        signal="BUY",
-                        strength="STRONG"
-                    )
+                    signal = self._generate_signal(request.market_data, signal_type)
+                    signals[signal_type] = signal
             
             return SignalResponse(
                 signals=signals,
@@ -675,37 +685,112 @@ class TechnicalAnalyzer:
         return sorted(df["high"].nlargest(3).tolist())
 
     def _detect_double_top(self, prices: np.ndarray) -> Optional[Pattern]:
-        # Simple implementation for testing
+        """더블 탑 패턴 감지"""
+        if len(prices) < 5:
+            return None
+
+        # 두 개의 고점과 그 사이의 저점 확인
+        peaks = (prices[1] > prices[0]) and (prices[1] > prices[2])
+        trough = (prices[2] < prices[1]) and (prices[2] < prices[3])
+        second_peak = (prices[3] > prices[2]) and (prices[3] > prices[4])
+
+        if peaks and trough and second_peak:
         return Pattern(
             type="double_top",
             confidence=0.8,
             timestamp=datetime.now().isoformat()
         )
+        return None
 
     def _detect_double_bottom(self, prices: np.ndarray) -> Optional[Pattern]:
-        # Simple implementation for testing
+        """더블 바텀 패턴 감지"""
+        if len(prices) < 5:
+            return None
+
+        # 두 개의 저점과 그 사이의 고점 확인
+        troughs = (prices[1] < prices[0]) and (prices[1] < prices[2])
+        peak = (prices[2] > prices[1]) and (prices[2] > prices[3])
+        second_trough = (prices[3] < prices[2]) and (prices[3] < prices[4])
+
+        if troughs and peak and second_trough:
         return Pattern(
             type="double_bottom",
             confidence=0.8,
             timestamp=datetime.now().isoformat()
         )
+        return None
 
     def _detect_head_shoulders(self, prices: np.ndarray) -> Optional[Pattern]:
-        # Simple implementation for testing
+        """헤드 앤 숄더 패턴 감지"""
+        if len(prices) < 7:
+            return None
+
+        # 헤드 앤 숄더 패턴 확인
+        left_shoulder = (prices[1] > prices[0]) and (prices[1] > prices[2])
+        head = (prices[3] > prices[1]) and (prices[3] > prices[5])
+        right_shoulder = (prices[5] > prices[4]) and (prices[5] > prices[6])
+
+        if left_shoulder and head and right_shoulder:
         return Pattern(
             type="head_shoulders",
             confidence=0.8,
             timestamp=datetime.now().isoformat()
         )
+        return None
 
     def _generate_trend_signal(self, prices: np.ndarray) -> Signal:
-        # Simple implementation for testing
+        if len(prices) < 20:
+            return Signal(signal="NEUTRAL", strength="WEAK")
+
+        # 가격 변화율 기준 (최근 종가 vs 시작 종가)
+        price_change = (prices[-1] - prices[0]) / prices[0]
+
+        # RSI 계산 (14)
+        close_series = pd.Series(prices)
+        delta = close_series.diff()
+        gain = delta.clip(lower=0).rolling(window=14).mean()
+        loss = -delta.clip(upper=0).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        rsi_latest = rsi.iloc[-1]
+
+        # 조건 조합
+        if price_change > 0.02 and rsi_latest < 70:
         return Signal(signal="BUY", strength="STRONG")
+        elif price_change < -0.02 and rsi_latest > 30:
+            return Signal(signal="SELL", strength="STRONG")
+        else:
+            return Signal(signal="NEUTRAL", strength="WEAK")
 
     def _generate_reversion_signal(self, prices: np.ndarray) -> Signal:
-        # Simple implementation for testing
+        if len(prices) < 20:
+            return Signal(signal="NEUTRAL", strength="WEAK")
+
+        close_series = pd.Series(prices)
+        sma_20 = close_series.rolling(window=20).mean()
+        std_20 = close_series.rolling(window=20).std()
+
+        upper_band = sma_20 + 2 * std_20
+        lower_band = sma_20 - 2 * std_20
+
+        if prices[-1] < lower_band.iloc[-1]:
+            return Signal(signal="BUY", strength="MODERATE")
+        elif prices[-1] > upper_band.iloc[-1]:
         return Signal(signal="SELL", strength="MODERATE")
+        else:
+            return Signal(signal="NEUTRAL", strength="WEAK")
 
     def _generate_breakout_signal(self, prices: np.ndarray) -> Signal:
-        # Simple implementation for testing
+        if len(prices) < 20:
+            return Signal(signal="NEUTRAL", strength="WEAK")
+
+        recent_high = np.max(prices[-20:-1])
+        recent_low = np.min(prices[-20:-1])
+        current_price = prices[-1]
+
+        if current_price > recent_high:
         return Signal(signal="BUY", strength="STRONG") 
+        elif current_price < recent_low:
+            return Signal(signal="SELL", strength="STRONG")
+        else:
+            return Signal(signal="NEUTRAL", strength="WEAK") 
