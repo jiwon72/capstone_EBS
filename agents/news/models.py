@@ -80,4 +80,19 @@ class NewsAnalysisResponse(BaseModel):
     trading_implications: List[Dict]
     risk_factors: List[Dict]
     summary: str
-    key_findings: str 
+    key_findings: str
+
+class NewsToStrategyOutput(BaseModel):
+    timestamp: datetime
+    stocks: List[Dict[str, Any]]
+    market_conditions: Dict[str, Any] = {
+        "market_trend": str,
+        "volatility_level": str,
+        "trading_volume": float,
+        "sector_performance": Dict[str, float],
+        "major_events": List[str]
+    }
+    sector_sentiment: Dict[str, float]
+
+    class Config:
+        arbitrary_types_allowed = True 

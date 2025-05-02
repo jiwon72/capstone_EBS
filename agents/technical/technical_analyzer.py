@@ -695,7 +695,7 @@ class TechnicalAnalyzer:
         second_peak = (prices[3] > prices[2]) and (prices[3] > prices[4])
 
         if peaks and trough and second_peak:
-        return Pattern(
+            return Pattern(
             type="double_top",
             confidence=0.8,
             timestamp=datetime.now().isoformat()
@@ -713,7 +713,7 @@ class TechnicalAnalyzer:
         second_trough = (prices[3] < prices[2]) and (prices[3] < prices[4])
 
         if troughs and peak and second_trough:
-        return Pattern(
+            return Pattern(
             type="double_bottom",
             confidence=0.8,
             timestamp=datetime.now().isoformat()
@@ -731,7 +731,7 @@ class TechnicalAnalyzer:
         right_shoulder = (prices[5] > prices[4]) and (prices[5] > prices[6])
 
         if left_shoulder and head and right_shoulder:
-        return Pattern(
+            return Pattern(
             type="head_shoulders",
             confidence=0.8,
             timestamp=datetime.now().isoformat()
@@ -756,7 +756,7 @@ class TechnicalAnalyzer:
 
         # 조건 조합
         if price_change > 0.02 and rsi_latest < 70:
-        return Signal(signal="BUY", strength="STRONG")
+            return Signal(signal="BUY", strength="STRONG")
         elif price_change < -0.02 and rsi_latest > 30:
             return Signal(signal="SELL", strength="STRONG")
         else:
@@ -776,7 +776,7 @@ class TechnicalAnalyzer:
         if prices[-1] < lower_band.iloc[-1]:
             return Signal(signal="BUY", strength="MODERATE")
         elif prices[-1] > upper_band.iloc[-1]:
-        return Signal(signal="SELL", strength="MODERATE")
+            return Signal(signal="SELL", strength="MODERATE")
         else:
             return Signal(signal="NEUTRAL", strength="WEAK")
 
@@ -789,7 +789,7 @@ class TechnicalAnalyzer:
         current_price = prices[-1]
 
         if current_price > recent_high:
-        return Signal(signal="BUY", strength="STRONG") 
+            return Signal(signal="BUY", strength="STRONG") 
         elif current_price < recent_low:
             return Signal(signal="SELL", strength="STRONG")
         else:

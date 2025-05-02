@@ -8,8 +8,13 @@ from difflib import SequenceMatcher
 from deep_translator import GoogleTranslator
 from bs4 import BeautifulSoup
 import pandas as pd
-from typing import List, Dict
-from datetime import datetime
+import numpy as np
+from typing import List, Dict, Tuple, Any
+from datetime import datetime, timedelta
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from agents.utils.logger import AgentLogger
 
 client_id = "jWYb81zpxwjjBOvjTlc1"
 client_secret = "CH69vSJ6hu"
@@ -114,6 +119,7 @@ class MarketImpactAnalyzer:
 
 class NewsAnalyzer:
     def __init__(self):
+        self.logger = AgentLogger("news_analyzer")
         self.market_impact_analyzer = MarketImpactAnalyzer()
 
     def get_top100_by_volume(self):
@@ -176,7 +182,7 @@ class NewsAnalyzer:
             description = item['description'].replace('<b>', '').replace('</b>', '')
 
             if self.is_similar(description, unique_descriptions):
-                continue
+                    continue
             unique_descriptions.append(description)
             latest_title = title
 
@@ -191,7 +197,7 @@ class NewsAnalyzer:
             except Exception as e:
                 print(f"[번역 실패] {e}")
                 continue
-
+                
             sentiment = analyzer.polarity_scores(translated)
             compound_score = sentiment['compound']
             sentiment_scores.append(compound_score)
@@ -226,25 +232,53 @@ class NewsAnalyzer:
                 "영향섹터": []
             }
 
-    def run_sentiment_analysis(self):
-        top_stocks = self.get_top100_by_volume()
-        print("📊 거래대금 상위 종목 불러오기 완료\n")
-
-        results = []
-        for stock in top_stocks:
-            print(f"🔍 {stock} 분석 중...")
-            result = self.analyze_sentiment_for_stock(stock)
-            if result:
-                results.append(result)
-            time.sleep(1.5)
-
-        df = pd.DataFrame(results)
-        df.to_csv("sentiment_result.csv", index=False, encoding='utf-8-sig')
+    def run_sentiment_analysis(self) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
+        """
+        뉴스 데이터를 분석하여 감성 점수와 관련 메트릭을 계산합니다.
         
-        with open("sentiment_result.json", "w", encoding='utf-8') as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-
-        return df, results
+        Returns:
+            Tuple[pd.DataFrame, List[Dict]]: 분석 결과 DataFrame과 JSON 형식의 결과
+        """
+        try:
+            self.logger.info("Starting sentiment analysis")
+            
+            # 거래대금 상위 종목 가져오기
+            top_stocks = self.get_top100_by_volume()
+            self.logger.info(f"Retrieved top {len(top_stocks)} stocks by trading volume")
+            
+            # 각 종목별 뉴스 분석 실행
+            results = []
+            for stock in top_stocks:
+                self.logger.info(f"Analyzing news for {stock}")
+                result = self.analyze_sentiment_for_stock(stock)
+                if result:
+                    results.append(result)
+                time.sleep(1.5)  # API 호출 제한 준수
+            
+            # DataFrame 생성
+            df_result = pd.DataFrame(results)
+            
+            # JSON 형식으로 변환
+            json_result = []
+            for _, row in df_result.iterrows():
+                stock_data = {
+                    "종목명": row["종목명"],
+                    "감성점수": float(row["감성점수"]) if pd.notnull(row["감성점수"]) else 0.0,
+                    "매수확률": float(row["매수확률"]) if pd.notnull(row["매수확률"]) else 0.0,
+                    "뉴스갯수": int(row["뉴스갯수"]),
+                    "시장영향도": float(row["시장영향도"]),
+                    "영향섹터": row["영향섹터"] if isinstance(row["영향섹터"], list) else [],
+                    "추천": row["추천"],
+                    "technical_indicators": None  # Technical Agent에서 추가될 예정
+                }
+                json_result.append(stock_data)
+            
+            self.logger.info(f"Sentiment analysis completed for {len(json_result)} stocks")
+            return df_result, json_result
+                    
+        except Exception as e:
+            self.logger.error(f"Error in sentiment analysis: {str(e)}")
+            raise
 
 if __name__ == "__main__":
     analyzer = NewsAnalyzer()

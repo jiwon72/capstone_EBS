@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from enum import Enum
 from datetime import datetime
 
@@ -28,19 +28,19 @@ class TechnicalIndicator(BaseModel):
     name: str
     value: float
     signal: str
-    parameters: Dict[str, any]
+    parameters: Dict[str, Any]
 
 class EntryCondition(BaseModel):
     indicator: str
     condition: str
     threshold: float
-    additional_params: Optional[Dict[str, any]] = None
+    additional_params: Optional[Dict[str, Any]] = None
 
 class ExitCondition(BaseModel):
     indicator: str
     condition: str
     threshold: float
-    additional_params: Optional[Dict[str, any]] = None
+    additional_params: Optional[Dict[str, Any]] = None
 
 class RiskParameters(BaseModel):
     max_position_size: float = Field(..., gt=0, le=1)
@@ -70,4 +70,20 @@ class StrategyResponse(BaseModel):
     time_horizon: TimeHorizon
     explanation: str
     created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now) 
+    updated_at: datetime = Field(default_factory=datetime.now)
+    sector_allocation: Dict[str, float]
+
+    def to_dict(self) -> Dict:
+        return {
+            "strategy_id": self.strategy_id,
+            "strategy_type": self.strategy_type.value,
+            "entry_conditions": [ec.__dict__ for ec in self.entry_conditions],
+            "exit_conditions": [ec.__dict__ for ec in self.exit_conditions],
+            "position_size": self.position_size,
+            "risk_parameters": self.risk_parameters.__dict__,
+            "technical_indicators": [ti.__dict__ for ti in self.technical_indicators],
+            "target_assets": self.target_assets,
+            "time_horizon": self.time_horizon.value,
+            "explanation": self.explanation,
+            "sector_allocation": self.sector_allocation
+        } 
