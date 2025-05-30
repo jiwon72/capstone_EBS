@@ -10,6 +10,7 @@ from ta.volatility import BollingerBands
 import json
 import os
 import logging
+from dotenv import load_dotenv
 from .models import (
     StrategyType, TimeHorizon, MarketCondition,
     EntryCondition, ExitCondition, RiskParameters,
@@ -21,9 +22,35 @@ logger = logging.getLogger(__name__)
 
 class StrategyGenerator:
     def __init__(self):
-        self.openai_client = openai.OpenAI()
+        # .env 파일 로드
+        load_dotenv()
+        
+        # OpenAI API 키 설정
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY가 .env 파일에 설정되지 않았습니다.")
+        
+        self.openai_client = openai.OpenAI(api_key=api_key)
         self.pipeline_dir = "data/pipeline"
         
+    def _log_openai_response(self, response: Any):
+        """OpenAI 응답을 로깅합니다."""
+        try:
+            if hasattr(response, 'choices'):
+                logger.info(f"OpenAI Response: {response.choices[0].message.content}")
+            else:
+                logger.info(f"OpenAI Response: {response}")
+        except Exception as e:
+            logger.error(f"Error logging OpenAI response: {str(e)}")
+            
+    def _handle_openai_error(self, error: Exception):
+        """OpenAI 오류를 처리하고 로깅합니다."""
+        error_message = str(error)
+        logger.error(f"OpenAI API Error: {error_message}")
+        if "authentication" in error_message.lower():
+            logger.error("OpenAI API 키가 올바르게 설정되지 않았습니다. OPENAI_API_KEY 환경 변수를 확인해주세요.")
+        raise
+
     def _load_news_analysis(self) -> Dict:
         """뉴스 분석 결과 로드"""
         try:
@@ -304,53 +331,11 @@ class StrategyGenerator:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7
             )
+            self._log_openai_response(response)
             return response.choices[0].message.content
         except Exception as e:
+            self._handle_openai_error(e)
             return f"GPT 분석 실패: {str(e)}"
-
-    def _calculate_sector_allocation(self, market_data: Dict[str, Any]) -> Dict[str, float]:
-        """
-        시장 데이터를 기반으로 섹터별 투자 비중을 계산합니다.
-        
-        Args:
-            market_data: 시장 데이터 딕셔너리
-            
-        Returns:
-            섹터별 투자 비중을 담은 딕셔너리 (섹터명: 비중)
-        """
-        sector_allocation = {}
-        
-        # 섹터 성과 데이터 추출
-        sector_performance = market_data.get('sector_performance', {})
-        if not sector_performance:
-            logger.warning("섹터 성과 데이터가 없습니다. 기본 비중을 반환합니다.")
-            return {'IT': 0.3, 'Healthcare': 0.2, 'Consumer': 0.2, 
-                   'Financial': 0.15, 'Industrial': 0.15}
-        
-        # 섹터별 점수 계산
-        sector_scores = {}
-        for sector, data in sector_performance.items():
-            momentum = data.get('momentum', 0)
-            growth = data.get('growth', 0)
-            value = data.get('value', 0)
-            
-            # 각 지표에 가중치를 적용하여 최종 점수 계산
-            score = (momentum * 0.4) + (growth * 0.4) + (value * 0.2)
-            sector_scores[sector] = max(score, 0)  # 음수 점수 방지
-            
-        # 점수 총합 계산
-        total_score = sum(sector_scores.values())
-        
-        # 점수를 비중으로 변환
-        if total_score > 0:
-            for sector, score in sector_scores.items():
-                sector_allocation[sector] = round(score / total_score, 2)
-        else:
-            logger.warning("모든 섹터의 점수가 0 이하입니다. 균등 비중을 적용합니다.")
-            equal_weight = round(1.0 / len(sector_scores), 2)
-            sector_allocation = {sector: equal_weight for sector in sector_scores}
-        
-        return sector_allocation
 
     def generate_strategy(
         self,
@@ -366,20 +351,6 @@ class StrategyGenerator:
         # 시장 상황 분석
         if not market_conditions:
             market_conditions = self._analyze_market_conditions(news_data)
-            
-        # 섹터 비중 계산 (뉴스 데이터에서 시장 상황 데이터 추출)
-        market_data = {
-            'sector_performance': {
-                sector: {
-                    'momentum': news_data.get('sector_momentum', {}).get(sector, 0),
-                    'growth': news_data.get('sector_growth', {}).get(sector, 0),
-                    'value': news_data.get('sector_value', {}).get(sector, 0)
-                }
-                for sector in news_data.get('sector_sentiment', {}).keys()
-            }
-        }
-        sector_allocation = self._calculate_sector_allocation(market_data)
-        print("📊 자동 계산된 산업 비중:", sector_allocation)
         
         # 전략 유형 선택
         strategy_type = self._select_strategy_type(market_conditions)
@@ -407,9 +378,6 @@ class StrategyGenerator:
         explanation = f"""
         {strategy_type.value.upper()} 전략이 생성되었습니다.
         시장 상황: {market_conditions.market_trend} (변동성: {market_conditions.volatility_level})
-        
-        📊 산업별 투자 비중:
-        {chr(10).join([f'- {sector}: {weight:.2%}' for sector, weight in sector_allocation.items()])}
         
         🎯 주요 투자 대상:
         {chr(10).join([f'- {stock}' for stock in target_assets])}
@@ -440,8 +408,34 @@ class StrategyGenerator:
             technical_indicators=technical_indicators,
             target_assets=target_assets,
             time_horizon=time_horizon,
-            explanation=explanation,
-            sector_allocation=sector_allocation
+            explanation=explanation
         )
         
         return strategy 
+
+    def propose(self, context):
+        """
+        자신의 전략 결과를 의견으로 제시합니다.
+        """
+        # 예시: context에서 market_conditions를 받아 전략 생성
+        market_conditions = context.get('market_conditions', None)
+        strategy = self.generate_strategy(user_input="", market_conditions=market_conditions)
+        decision = strategy.recommended_strategy if hasattr(strategy, 'recommended_strategy') else 'HOLD'
+        confidence = getattr(strategy, 'confidence', 0.5)
+        return {
+            'agent': 'strategy_generator',
+            'decision': decision,
+            'confidence': confidence,
+            'reason': '전략 생성 결과'
+        }
+
+    def debate(self, context, others_opinions):
+        """
+        타 에이전트 의견을 참고해 자신의 의견을 보완/수정합니다.
+        """
+        my_opinion = self.propose(context)
+        # 예시: 타 에이전트가 모두 HOLD면 본인도 HOLD로 보정
+        if all(op['decision'] == 'HOLD' for op in others_opinions):
+            my_opinion['decision'] = 'HOLD'
+            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
+        return my_opinion 

@@ -70,8 +70,8 @@ class StrategyResponse(BaseModel):
     time_horizon: TimeHorizon
     explanation: str
     created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
-    sector_allocation: Dict[str, float]
+    updated_at: datetime = Field(default_factory=datetime.now) 
+    sector_allocation: Optional[Dict[str, float]] = Field(default_factory=dict)
 
     def to_dict(self) -> Dict:
         return {
@@ -85,5 +85,5 @@ class StrategyResponse(BaseModel):
             "target_assets": self.target_assets,
             "time_horizon": self.time_horizon.value,
             "explanation": self.explanation,
-            "sector_allocation": self.sector_allocation
+            "sector_allocation": self.sector_allocation or {}
         } 

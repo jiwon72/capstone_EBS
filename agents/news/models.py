@@ -80,7 +80,7 @@ class NewsAnalysisResponse(BaseModel):
     trading_implications: List[Dict]
     risk_factors: List[Dict]
     summary: str
-    key_findings: str
+    key_findings: str 
 
 class NewsToStrategyOutput(BaseModel):
     timestamp: datetime

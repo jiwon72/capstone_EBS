@@ -47,7 +47,7 @@ class MarketImpactAnalyzer:
             'related_stocks': [],
             'time_horizon': 'short_term'  # short_term, mid_term, long_term
         }
-
+        
         # 섹터 영향 분석
         for sector, keywords in self.sector_keywords.items():
             for keyword in keywords:
@@ -274,11 +274,42 @@ class NewsAnalyzer:
                 json_result.append(stock_data)
             
             self.logger.info(f"Sentiment analysis completed for {len(json_result)} stocks")
+            # 최신 결과를 news_output.json에 저장
+            output_path = os.path.join(self.pipeline_dir, "news_output.json") if hasattr(self, 'pipeline_dir') else "data/pipeline/news_output.json"
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump({"stocks": json_result}, f, ensure_ascii=False, indent=2)
             return df_result, json_result
                     
         except Exception as e:
             self.logger.error(f"Error in sentiment analysis: {str(e)}")
             raise
+
+    def propose(self, context):
+        """
+        자신의 뉴스 분석 결과를 의견으로 제시합니다.
+        """
+        symbol = context.get('symbol', '삼성전자')
+        analysis = self.analyze_sentiment_for_stock(symbol)
+        # 예시: 감성 점수와 시장 영향도 기반 의견
+        sentiment_score = analysis.get('sentiment_score', 0.0) if analysis else 0.0
+        decision = 'BUY' if sentiment_score > 0.5 else 'SELL' if sentiment_score < -0.5 else 'HOLD'
+        return {
+            'agent': 'news_analyzer',
+            'decision': decision,
+            'confidence': abs(sentiment_score),
+            'reason': f'뉴스 감성 점수 기반: {sentiment_score:.2f}'
+        }
+
+    def debate(self, context, others_opinions):
+        """
+        타 에이전트 의견을 참고해 자신의 의견을 보완/수정합니다.
+        """
+        my_opinion = self.propose(context)
+        # 예시: 타 에이전트가 모두 BUY면 본인도 BUY로 보정
+        if all(op['decision'] == 'BUY' for op in others_opinions):
+            my_opinion['decision'] = 'BUY'
+            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
+        return my_opinion
 
 if __name__ == "__main__":
     analyzer = NewsAnalyzer()

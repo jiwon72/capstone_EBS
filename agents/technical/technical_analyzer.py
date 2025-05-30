@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import investpy
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 import talib
@@ -15,9 +16,35 @@ from .models import (
     MovingAverageResponse, PatternResponse,
     SignalResponse, Pattern, Signal
 )
+import logging
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential
+from keras.layers import LSTM, Dense, Dropout
+import warnings
+warnings.filterwarnings('ignore')
 
 class TechnicalAnalyzer:
     def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        
+        # 로그 포맷 설정
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        
+        # 파일 핸들러 추가
+        fh = logging.FileHandler(f'logs/technical_analyzer_{datetime.now().strftime("%Y%m%d")}.log')
+        fh.setFormatter(formatter)
+        self.logger.addHandler(fh)
+        
+        # 콘솔 핸들러 추가
+        ch = logging.StreamHandler()
+        ch.setFormatter(formatter)
+        self.logger.addHandler(ch)
+        
+        # LSTM 모델 초기화
+        self.lstm_model = None
+        self.scaler = MinMaxScaler()
+        
         self.timeframe_map = {
             TimeFrame.M1: "1m",
             TimeFrame.M5: "5m",
@@ -46,6 +73,574 @@ class TechnicalAnalyzer:
             "breakout": self._generate_breakout_signal
         }
         
+        self.timeframe = TimeFrame.D1  # 기본값으로 일봉 설정
+        self.patterns = {}
+        self.trends = {}
+        self.volume_analysis = {}
+        self.forecast = {}
+        
+    def analyze(self, symbol: str, period: str = "1y") -> Dict:
+        """
+        기술적 분석을 수행합니다.
+        """
+        try:
+            self.logger.info(f"{symbol} 기술적 분석 시작")
+            
+            # 1. 데이터 수집
+            self.logger.info(f"{symbol} 데이터 수집 시작")
+            data = self._fetch_historical_data(symbol, period)
+            self.logger.info(f"{symbol} 데이터 수집 완료: {len(data)} rows")
+            
+            # 방어 코드 추가: 데이터가 비어 있거나 'Close' 컬럼이 없으면 바로 리턴
+            if data.empty or 'Close' not in data.columns:
+                self.logger.warning(f"{symbol}의 데이터가 비어 있거나 'Close' 컬럼이 없습니다.")
+                return None
+            
+            self.logger.info(f"최근 종가: {data['Close'].iloc[-1]:,.0f}원")
+            
+            # 2. 기술적 지표 계산
+            self.logger.info(f"{symbol} 기술적 지표 계산 시작")
+            indicators = self._calculate_technical_indicators(data)
+            self.logger.info(f"RSI(14): {indicators['rsi'].iloc[-1]:.2f}")
+            self.logger.info(f"MACD: {indicators['macd'].iloc[-1]:.2f}")
+            self.logger.info(f"MACD Signal: {indicators['macd_signal'].iloc[-1]:.2f}")
+            self.logger.info(f"볼린저 밴드 상단: {indicators['bb_upper'].iloc[-1]:,.0f}")
+            self.logger.info(f"볼린저 밴드 중간: {indicators['bb_middle'].iloc[-1]:,.0f}")
+            self.logger.info(f"볼린저 밴드 하단: {indicators['bb_lower'].iloc[-1]:,.0f}")
+            
+            # 3. 패턴 분석
+            self.logger.info(f"{symbol} 패턴 분석 시작")
+            patterns = self._analyze_chart_patterns(data)
+            for pattern in patterns:
+                self.logger.info(f"감지된 패턴: {pattern['pattern']}, 방향: {pattern['direction']}, 강도: {pattern['strength']}")
+            
+            # 4. 추세 분석
+            self.logger.info(f"{symbol} 추세 분석 시작")
+            trend_analysis = self._analyze_trend(data)
+            self.logger.info(f"단기 추세: {trend_analysis['short_term_trend']}")
+            self.logger.info(f"중기 추세: {trend_analysis['mid_term_trend']}")
+            self.logger.info(f"장기 추세: {trend_analysis['long_term_trend']}")
+            self.logger.info(f"추세 강도: {trend_analysis['trend_strength']:.2f}")
+            
+            # 5. 거래량 분석
+            self.logger.info(f"{symbol} 거래량 분석 시작")
+            volume_analysis = self._analyze_volume(data)
+            self.logger.info(f"거래량 추세: {volume_analysis['volume_trend']}")
+            self.logger.info(f"거래량 비율: {volume_analysis['volume_ratio']:.2f}")
+            self.logger.info(f"VWAP: {volume_analysis['vwap']:,.0f}")
+            
+            # 6. 시계열 예측
+            self.logger.info(f"{symbol} 시계열 예측 시작")
+            price_forecast = self._forecast_price(data)
+            for i, (date, price) in enumerate(zip(price_forecast['forecast_dates'], price_forecast['forecast_prices'])):
+                self.logger.info(f"{i+1}일 후 예상가격: {price:,.0f}원")
+            
+            # 7. 분석 결과 종합
+            self.logger.info(f"{symbol} 분석 결과 종합 시작")
+            analysis = {
+                'symbol': symbol,
+                'timeframe': self.timeframe_map[self.timeframe],
+                'current_price': data['Close'].iloc[-1],
+                'indicators': indicators,
+                'patterns': patterns,
+                'trend_analysis': trend_analysis,
+                'volume_analysis': volume_analysis,
+                'price_forecast': price_forecast,
+                'analysis_summary': self._generate_analysis_summary(
+                    indicators, patterns, trend_analysis, volume_analysis, price_forecast
+                ),
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # 8. 매매 신호 출력
+            signals = self._generate_trading_signals(indicators, patterns, trend_analysis)
+            for signal in signals:
+                self.logger.info(f"매매 신호: {signal['type']}, 지표: {signal['indicator']}, 강도: {signal['strength']}, 이유: {signal['reason']}")
+            
+            self.logger.info(f"{symbol} 분석 결과 종합 완료")
+            return analysis
+            
+        except Exception as e:
+            self.logger.error(f"기술적 분석 중 오류 발생: {str(e)}")
+            return None
+
+    def analyze_technical_indicators(self, symbol: str, period: str = "1y") -> Dict:
+        """
+        기술적 지표를 분석합니다.
+        """
+        try:
+            # 1. 데이터 수집
+            data = self._fetch_historical_data(symbol, period)
+            if data is None or len(data) == 0:
+                raise ValueError("데이터가 비어 있습니다.")
+            # 2. 기본 기술적 지표 계산
+            indicators = self._calculate_technical_indicators(data)
+            # 3. 차트 패턴 분석
+            patterns = self._analyze_chart_patterns(data)
+            # 4. 추세 분석
+            trend_analysis = self._analyze_trend(data)
+            # 5. 거래량 분석
+            volume_analysis = self._analyze_volume(data)
+            # 6. 시계열 예측
+            price_forecast = self._forecast_price(data)
+            return {
+                'symbol': symbol,
+                'technical_indicators': indicators,
+                'chart_patterns': patterns,
+                'trend_analysis': trend_analysis,
+                'volume_analysis': volume_analysis,
+                'price_forecast': price_forecast,
+                'analysis_summary': self._generate_analysis_summary(
+                    indicators, patterns, trend_analysis, volume_analysis, price_forecast
+                )
+            }
+        except Exception as e:
+            self.logger.error(f"기술적 분석 중 오류 발생: {str(e)}")
+            return {
+                'symbol': symbol,
+                'technical_indicators': {},
+                'chart_patterns': [],
+                'trend_analysis': {},
+                'volume_analysis': {},
+                'price_forecast': {},
+                'analysis_summary': f"기술적 분석 중 오류 발생: {str(e)}"
+            }
+
+    def _fetch_historical_data(self, symbol: str, period: str) -> pd.DataFrame:
+        """
+        국내 주식(코스피/코스닥)은 investpy만 사용, investpy 실패 시 빈 DataFrame 반환. 해외 주식만 yfinance 사용. 한글 종목명도 investpy로 강제 처리.
+        """
+        # 한글 종목명 → 코드 변환
+        if not symbol.isdigit() and not symbol.endswith('.KS') and not symbol.endswith('.KQ'):
+            code = self._get_stock_code(symbol) if hasattr(self, '_get_stock_code') else None
+            if code:
+                symbol = code
+            else:
+                self.logger.warning(f"한글 종목명 {symbol}의 코드 변환에 실패했습니다. 데이터 수집 불가.")
+                return pd.DataFrame()
+        is_kor = symbol.isdigit() or symbol.endswith('.KS') or symbol.endswith('.KQ')
+        try:
+            if is_kor:
+                from datetime import datetime, timedelta
+                today = datetime.today()
+                if period.endswith('y'):
+                    years = int(period[:-1])
+                    start = today - timedelta(days=365*years)
+                elif period.endswith('m'):
+                    months = int(period[:-1])
+                    start = today - timedelta(days=30*months)
+                elif period.endswith('d'):
+                    days = int(period[:-1])
+                    start = today - timedelta(days=days)
+                else:
+                    start = today - timedelta(days=365)
+                from_date = start.strftime('%d/%m/%Y')
+                to_date = today.strftime('%d/%m/%Y')
+                code = symbol.replace('.KS','').replace('.KQ','')
+                import investpy
+                data = investpy.get_stock_historical_data(stock=code, country='south korea', from_date=from_date, to_date=to_date)
+                if not data.empty:
+                    data.index = pd.to_datetime(data.index)
+                    return data
+                else:
+                    self.logger.warning(f"investpy로 {symbol} 데이터가 비어 있습니다.")
+                    return pd.DataFrame()
+            else:
+                import yfinance as yf
+                data = yf.download(symbol, period=period)
+                if data.empty:
+                    self.logger.warning(f"yfinance로 {symbol} 데이터가 비어 있습니다.")
+                    return pd.DataFrame()
+                return data
+        except Exception as e:
+            self.logger.error(f"데이터 수집 실패: {str(e)}")
+            return pd.DataFrame()
+
+    def _calculate_technical_indicators(self, data: pd.DataFrame) -> Dict:
+        """
+        기술적 지표를 계산합니다.
+        """
+        indicators = {}
+        
+        # 이동평균선
+        indicators['sma_20'] = talib.SMA(data['Close'], timeperiod=20)
+        indicators['sma_50'] = talib.SMA(data['Close'], timeperiod=50)
+        indicators['sma_200'] = talib.SMA(data['Close'], timeperiod=200)
+        
+        # RSI
+        indicators['rsi'] = talib.RSI(data['Close'], timeperiod=14)
+        
+        # MACD
+        macd, macd_signal, macd_hist = talib.MACD(
+            data['Close'], 
+            fastperiod=12, 
+            slowperiod=26, 
+            signalperiod=9
+        )
+        indicators['macd'] = macd
+        indicators['macd_signal'] = macd_signal
+        indicators['macd_hist'] = macd_hist
+        
+        # 볼린저 밴드
+        upper, middle, lower = talib.BBANDS(
+            data['Close'],
+            timeperiod=20,
+            nbdevup=2,
+            nbdevdn=2
+        )
+        indicators['bb_upper'] = upper
+        indicators['bb_middle'] = middle
+        indicators['bb_lower'] = lower
+        
+        # 스토캐스틱
+        slowk, slowd = talib.STOCH(
+            data['High'],
+            data['Low'],
+            data['Close'],
+            fastk_period=14,
+            slowk_period=3,
+            slowk_matype=0,
+            slowd_period=3,
+            slowd_matype=0
+        )
+        indicators['stoch_k'] = slowk
+        indicators['stoch_d'] = slowd
+        
+        return indicators
+
+    def _analyze_chart_patterns(self, data: pd.DataFrame) -> List[Dict]:
+        """
+        차트 패턴을 분석합니다.
+        """
+        patterns = []
+        # 데이터가 충분한지 확인
+        if data is None or len(data) < 7:
+            return patterns
+        
+        # 헤드앤숄더 패턴 (임시: Harami를 사용)
+        head_shoulders = talib.CDLHARAMI(data['Open'], data['High'], data['Low'], data['Close'])
+        if head_shoulders.iloc[-1] != 0:
+            patterns.append({
+                'pattern': 'HEAD_AND_SHOULDERS',
+                'direction': 'BEARISH' if head_shoulders.iloc[-1] < 0 else 'BULLISH',
+                'strength': abs(head_shoulders.iloc[-1])
+            })
+        
+        # 더블탑/더블바텀: 간단한 로직으로 대체
+        close = data['Close']
+        if len(close) >= 5:
+            # 더블탑: 최근 5개 중 2개의 고점이 비슷하고, 그 사이에 저점이 있으면 감지
+            peaks = (close[-5] < close[-4] > close[-3]) and (close[-1] < close[-2] > close[-3])
+            if peaks and abs(close[-4] - close[-2]) < 1.0:  # 고점 차이 임계값
+                patterns.append({
+                    'pattern': 'DOUBLE_TOP',
+                    'direction': 'BEARISH',
+                    'strength': 1
+                })
+            # 더블바텀: 최근 5개 중 2개의 저점이 비슷하고, 그 사이에 고점이 있으면 감지
+            troughs = (close[-5] > close[-4] < close[-3]) and (close[-1] > close[-2] < close[-3])
+            if troughs and abs(close[-4] - close[-2]) < 1.0:
+                patterns.append({
+                    'pattern': 'DOUBLE_BOTTOM',
+                    'direction': 'BULLISH',
+                    'strength': 1
+                })
+        
+        # 삼각형 패턴 등은 추후 구현
+        return patterns
+
+    def _analyze_trend(self, data: pd.DataFrame) -> Dict:
+        """
+        추세를 분석합니다.
+        """
+        if data is None or len(data) < 200:
+            return {
+                'short_term_trend': 'DOWN',
+                'mid_term_trend': 'DOWN',
+                'long_term_trend': 'DOWN',
+                'trend_strength': 0
+            }
+        # 단기 추세 (20일)
+        short_trend = 'UP' if data['Close'].iloc[-1] > data['Close'].iloc[-20] else 'DOWN'
+        # 중기 추세 (50일)
+        mid_trend = 'UP' if data['Close'].iloc[-1] > data['Close'].iloc[-50] else 'DOWN'
+        # 장기 추세 (200일)
+        long_trend = 'UP' if data['Close'].iloc[-1] > data['Close'].iloc[-200] else 'DOWN'
+        # 추세 강도 계산
+        trend_strength = self._calculate_trend_strength(data)
+        return {
+            'short_term_trend': short_trend,
+            'mid_term_trend': mid_trend,
+            'long_term_trend': long_trend,
+            'trend_strength': trend_strength
+        }
+
+    def _calculate_trend_strength(self, data: pd.DataFrame) -> float:
+        """
+        추세의 강도를 계산합니다.
+        """
+        # ADX 지표 사용
+        adx = talib.ADX(data['High'], data['Low'], data['Close'], timeperiod=14)
+        return adx.iloc[-1]
+
+    def _analyze_volume(self, data: pd.DataFrame) -> Dict:
+        """
+        거래량을 분석합니다.
+        """
+        # 거래량 이동평균
+        volume_sma = talib.SMA(data['Volume'], timeperiod=20)
+        
+        # 거래량 추세
+        volume_trend = 'UP' if data['Volume'].iloc[-1] > volume_sma.iloc[-1] else 'DOWN'
+        
+        # 거래량 가중 가격
+        vwap = self._calculate_vwap(data)
+        
+        return {
+            'volume_trend': volume_trend,
+            'volume_sma': volume_sma.iloc[-1],
+            'current_volume': data['Volume'].iloc[-1],
+            'volume_ratio': data['Volume'].iloc[-1] / volume_sma.iloc[-1],
+            'vwap': vwap
+        }
+
+    def _calculate_vwap(self, data: pd.DataFrame) -> float:
+        """
+        VWAP(Volume Weighted Average Price)를 계산합니다.
+        """
+        typical_price = (data['High'] + data['Low'] + data['Close']) / 3
+        vwap = (typical_price * data['Volume']).sum() / data['Volume'].sum()
+        return vwap
+
+    def _prepare_lstm_data(self, data: pd.DataFrame, sequence_length: int = 60) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        LSTM 모델을 위한 데이터를 준비합니다.
+        """
+        # 종가 데이터만 사용
+        prices = data['Close'].values.reshape(-1, 1)
+        
+        # 데이터 정규화
+        scaled_prices = self.scaler.fit_transform(prices)
+        
+        X, y = [], []
+        for i in range(sequence_length, len(scaled_prices)):
+            X.append(scaled_prices[i-sequence_length:i, 0])
+            y.append(scaled_prices[i, 0])
+            
+        return np.array(X), np.array(y)
+
+    def _build_lstm_model(self, sequence_length: int) -> Sequential:
+        """
+        LSTM 모델을 구축합니다.
+        """
+        model = Sequential([
+            LSTM(units=50, return_sequences=True, input_shape=(sequence_length, 1)),
+            Dropout(0.2),
+            LSTM(units=50, return_sequences=False),
+            Dropout(0.2),
+            Dense(units=1)
+        ])
+        
+        model.compile(optimizer='adam', loss='mean_squared_error')
+        return model
+
+    def _forecast_price(self, data: pd.DataFrame, forecast_days: int = 5) -> Dict:
+        """
+        가격을 예측합니다.
+        """
+        try:
+            # LSTM 데이터 준비
+            X, y = self._prepare_lstm_data(data)
+            
+            # 모델 구축 및 학습
+            if self.lstm_model is None:
+                self.lstm_model = self._build_lstm_model(sequence_length=60)
+                self.lstm_model.fit(X, y, epochs=50, batch_size=32, verbose=0)
+            
+            # 예측을 위한 최근 데이터 준비
+            last_sequence = data['Close'].values[-60:].reshape(-1, 1)
+            last_sequence = self.scaler.transform(last_sequence)
+            
+            # 예측
+            forecast = []
+            current_sequence = last_sequence.copy()
+            
+            for _ in range(forecast_days):
+                next_pred = self.lstm_model.predict(current_sequence.reshape(1, 60, 1), verbose=0)
+                forecast.append(next_pred[0, 0])
+                current_sequence = np.roll(current_sequence, -1)
+                current_sequence[-1] = next_pred
+            
+            # 예측값 역정규화
+            forecast = self.scaler.inverse_transform(np.array(forecast).reshape(-1, 1))
+            
+            return {
+                'forecast_prices': forecast.flatten().tolist(),
+                'forecast_dates': pd.date_range(
+                    start=data.index[-1] + timedelta(days=1),
+                    periods=forecast_days
+                ).tolist()
+            }
+            
+        except Exception as e:
+            self.logger.error(f"가격 예측 중 오류 발생: {str(e)}")
+            return {
+                'forecast_prices': [],
+                'forecast_dates': []
+            }
+
+    def _generate_analysis_summary(
+        self,
+        indicators: Dict,
+        patterns: List[Dict],
+        trend_analysis: Dict,
+        volume_analysis: Dict,
+        price_forecast: Dict
+    ) -> Dict:
+        """
+        분석 결과를 종합하여 요약합니다.
+        """
+        # 매수/매도 신호 생성
+        signals = self._generate_trading_signals(indicators, patterns, trend_analysis)
+        
+        # 신뢰도 점수 계산
+        confidence_score = self._calculate_confidence_score(
+            indicators, patterns, trend_analysis, volume_analysis
+        )
+        
+        return {
+            'trading_signals': signals,
+            'confidence_score': confidence_score,
+            'key_findings': self._summarize_key_findings(
+                indicators, patterns, trend_analysis, volume_analysis
+            )
+        }
+
+    def _generate_trading_signals(self, indicators: Dict, patterns: List[Dict], trend_analysis: Dict) -> List[Dict]:
+        signals = []
+        # RSI 기반 신호
+        if 'rsi' in indicators and hasattr(indicators['rsi'], 'iloc') and not indicators['rsi'].isna().all():
+            if indicators['rsi'].iloc[-1] < 30:
+                signals.append({
+                    'type': 'BUY',
+                    'indicator': 'RSI',
+                    'strength': 'STRONG',
+                    'reason': '과매도 상태'
+                })
+            elif indicators['rsi'].iloc[-1] > 70:
+                signals.append({
+                    'type': 'SELL',
+                    'indicator': 'RSI',
+                    'strength': 'STRONG',
+                    'reason': '과매수 상태'
+                })
+        # MACD 기반 신호
+        if 'macd' in indicators and 'macd_signal' in indicators and hasattr(indicators['macd'], 'iloc') and not indicators['macd'].isna().all():
+            if indicators['macd'].iloc[-1] > indicators['macd_signal'].iloc[-1] and \
+               indicators['macd'].iloc[-2] <= indicators['macd_signal'].iloc[-2]:
+                signals.append({
+                    'type': 'BUY',
+                    'indicator': 'MACD',
+                    'strength': 'MODERATE',
+                    'reason': 'MACD 골든크로스'
+                })
+        # 추세 기반 신호
+        if trend_analysis.get('short_term_trend') == 'UP' and \
+           trend_analysis.get('mid_term_trend') == 'UP' and \
+           trend_analysis.get('trend_strength', 0) > 25:
+            signals.append({
+                'type': 'BUY',
+                'indicator': 'TREND',
+                'strength': 'STRONG',
+                'reason': '강한 상승 추세'
+            })
+        # 패턴 기반 신호 예시 (옵션)
+        for pattern in patterns:
+            if pattern['pattern'] == 'DOUBLE_TOP':
+                signals.append({
+                    'type': 'SELL',
+                    'indicator': 'PATTERN',
+                    'strength': 'MODERATE',
+                    'reason': '더블탑 패턴 감지'
+                })
+            elif pattern['pattern'] == 'DOUBLE_BOTTOM':
+                signals.append({
+                    'type': 'BUY',
+                    'indicator': 'PATTERN',
+                    'strength': 'MODERATE',
+                    'reason': '더블바텀 패턴 감지'
+                })
+        return signals
+
+    def _calculate_confidence_score(
+        self,
+        indicators: Dict,
+        patterns: List[Dict],
+        trend_analysis: Dict,
+        volume_analysis: Dict
+    ) -> float:
+        """
+        분석의 신뢰도 점수를 계산합니다.
+        """
+        score = 0.0
+        total_factors = 0
+        
+        # RSI 신뢰도
+        if 30 <= indicators['rsi'].iloc[-1] <= 70:
+            score += 0.8
+        total_factors += 1
+        
+        # MACD 신뢰도
+        if abs(indicators['macd'].iloc[-1] - indicators['macd_signal'].iloc[-1]) > \
+           abs(indicators['macd'].iloc[-2] - indicators['macd_signal'].iloc[-2]):
+            score += 0.7
+        total_factors += 1
+        
+        # 추세 신뢰도
+        if trend_analysis['trend_strength'] > 25:
+            score += 0.9
+        total_factors += 1
+        
+        # 거래량 신뢰도
+        if volume_analysis['volume_ratio'] > 1.5:
+            score += 0.8
+        total_factors += 1
+        
+        return score / total_factors
+
+    def _summarize_key_findings(
+        self,
+        indicators: Dict,
+        patterns: List[Dict],
+        trend_analysis: Dict,
+        volume_analysis: Dict
+    ) -> List[str]:
+        """
+        주요 분석 결과를 요약합니다.
+        """
+        findings = []
+        
+        # RSI 상태
+        rsi = indicators['rsi'].iloc[-1]
+        if rsi < 30:
+            findings.append("RSI가 과매도 상태입니다.")
+        elif rsi > 70:
+            findings.append("RSI가 과매수 상태입니다.")
+        
+        # 추세 상태
+        if trend_analysis['trend_strength'] > 25:
+            findings.append(f"강한 {trend_analysis['short_term_trend']} 추세가 형성되어 있습니다.")
+        
+        # 거래량 상태
+        if volume_analysis['volume_ratio'] > 1.5:
+            findings.append("거래량이 평균보다 크게 증가했습니다.")
+        
+        # 차트 패턴
+        for pattern in patterns:
+            findings.append(f"{pattern['pattern']} 패턴이 감지되었습니다.")
+        
+        return findings
+
     def _fetch_market_data(
         self,
         ticker: str,
@@ -316,307 +911,6 @@ class TechnicalAnalyzer:
             
         return patterns
     
-    def _generate_trading_signals(
-        self,
-        df: pd.DataFrame,
-        indicators: TechnicalIndicators
-    ) -> List[TradingSignal]:
-        """트레이딩 신호 생성"""
-        signals = []
-        current_price = df['Close'].iloc[-1]
-        
-        # RSI 기반 신호
-        if indicators.oscillators.rsi_14 < 30:
-            signals.append(TradingSignal(
-                ticker=df.index.name,
-                timeframe=TimeFrame.D1,
-                signal=SignalStrength.BUY,
-                confidence=0.7,
-                entry_price=current_price,
-                stop_loss=current_price * 0.95,
-                take_profit=current_price * 1.1,
-                risk_reward_ratio=2.0,
-                indicators_used=["RSI"],
-                reasoning="Oversold condition detected by RSI"
-            ))
-        elif indicators.oscillators.rsi_14 > 70:
-            signals.append(TradingSignal(
-                ticker=df.index.name,
-                timeframe=TimeFrame.D1,
-                signal=SignalStrength.SELL,
-                confidence=0.7,
-                entry_price=current_price,
-                stop_loss=current_price * 1.05,
-                take_profit=current_price * 0.9,
-                risk_reward_ratio=2.0,
-                indicators_used=["RSI"],
-                reasoning="Overbought condition detected by RSI"
-            ))
-            
-        # MACD 기반 신호
-        if (indicators.oscillators.macd_histogram > 0 and
-            indicators.oscillators.macd_histogram > indicators.oscillators.macd_histogram):
-            signals.append(TradingSignal(
-                ticker=df.index.name,
-                timeframe=TimeFrame.D1,
-                signal=SignalStrength.BUY,
-                confidence=0.6,
-                entry_price=current_price,
-                stop_loss=current_price * 0.95,
-                take_profit=current_price * 1.1,
-                risk_reward_ratio=2.0,
-                indicators_used=["MACD"],
-                reasoning="MACD histogram showing increasing positive momentum"
-            ))
-            
-        return signals
-    
-    def analyze_technical(self, request: TechnicalAnalysisRequest) -> TechnicalAnalysisResponse:
-        """기술적 분석 수행"""
-        try:
-            # 시장 데이터를 DataFrame으로 변환
-            df = self._convert_to_dataframe(request.market_data)
-            
-            # 기술적 지표 계산
-            moving_averages = self._calculate_moving_averages(request)
-            oscillators = self._calculate_oscillators(df)
-            volume_indicators = self._calculate_volume_indicators(df)
-            support_resistance = self._calculate_support_resistance(df)
-            patterns = self._detect_patterns(df)
-            
-            # 기술적 지표 통합
-            indicators = TechnicalIndicators(
-                moving_averages=moving_averages,
-                oscillators=oscillators,
-                volume_indicators=volume_indicators,
-                support_resistance=support_resistance,
-                patterns=patterns
-            )
-            
-            # 거래 신호 생성
-            signals = self._generate_trading_signals(df, indicators)
-            
-            # 추세 분석
-            trend_analysis = {
-                "primary_trend": moving_averages.trend_direction,
-                "volume_trend": volume_indicators.volume_trend,
-                "momentum": SignalStrength.STRONG if oscillators.rsi_14 > 70 else (
-                    SignalStrength.WEAK if oscillators.rsi_14 < 30 else SignalStrength.NEUTRAL
-                ) if oscillators.rsi_14 is not None else SignalStrength.NEUTRAL
-            }
-            
-            # 분석 요약 생성
-            analysis_summary = self._generate_analysis_summary(
-                indicators,
-                signals,
-                trend_analysis
-            )
-            
-            return TechnicalAnalysisResponse(
-                ticker=request.ticker,
-                timeframe=request.timeframe,
-                market_data=request.market_data,
-                technical_indicators=indicators,
-                trading_signals=signals,
-                trend_analysis=trend_analysis,
-                analysis_summary=analysis_summary
-            )
-            
-        except Exception as e:
-            # 오류 발생 시 None 값을 포함한 응답 반환
-            return TechnicalAnalysisResponse(
-                ticker=request.ticker,
-                timeframe=request.timeframe,
-                market_data=request.market_data,
-                technical_indicators=TechnicalIndicators(
-                    moving_averages=MovingAverages(
-                        sma_20=None, sma_50=None, sma_200=None,
-                        ema_12=None, ema_26=None,
-                        trend_direction=TrendDirection.SIDEWAYS,
-                        golden_cross=False, death_cross=False
-                    ),
-                    oscillators=Oscillators(
-                        rsi_14=None, stoch_k=None, stoch_d=None,
-                        macd_line=None, macd_signal=None, macd_histogram=None,
-                        cci_20=None, atr_14=None,
-                        bollinger_upper=None, bollinger_middle=None, bollinger_lower=None
-                    ),
-                    volume_indicators=VolumeIndicators(
-                        obv=None, volume_sma_20=None,
-                        volume_trend=TrendDirection.SIDEWAYS,
-                        volume_price_trend=None, money_flow_index=None
-                    ),
-                    support_resistance=SupportResistance(
-                        pivot=None, r1=None, r2=None, s1=None, s2=None,
-                        resistance_levels=[], support_levels=[]
-                    )
-                ),
-                trading_signals=[],
-                trend_analysis={
-                    "primary_trend": TrendDirection.SIDEWAYS,
-                    "volume_trend": TrendDirection.SIDEWAYS,
-                    "momentum": SignalStrength.NEUTRAL
-                },
-                analysis_summary=f"기술적 분석 중 오류 발생: {str(e)}"
-            )
-    
-    def _generate_analysis_summary(
-        self,
-        indicators: TechnicalIndicators,
-        signals: List[TradingSignal],
-        trend_analysis: Dict
-    ) -> str:
-        """기술적 분석 요약 생성"""
-        summary = f"Technical Analysis Summary:\n\n"
-        
-        # 추세 정보
-        summary += f"Trend Analysis:\n"
-        summary += f"- Primary Trend: {trend_analysis['primary_trend']}\n"
-        summary += f"- Volume Trend: {trend_analysis['volume_trend']}\n"
-        summary += f"- Momentum: {trend_analysis['momentum']}\n\n"
-        
-        # 주요 기술적 지표
-        summary += f"Key Technical Indicators:\n"
-        summary += f"- RSI (14): {indicators.oscillators.rsi_14:.2f}\n"
-        summary += f"- MACD Histogram: {indicators.oscillators.macd_histogram:.2f}\n"
-        summary += f"- Stochastic K/D: {indicators.oscillators.stoch_k:.2f}/{indicators.oscillators.stoch_d:.2f}\n\n"
-        
-        # 패턴
-        if indicators.patterns:
-            summary += "Detected Patterns:\n"
-            for pattern in indicators.patterns:
-                summary += f"- {pattern.pattern_name}: {pattern.signal} (Confidence: {pattern.confidence:.1%})\n"
-            summary += "\n"
-            
-        # 트레이딩 신호
-        if signals:
-            summary += "Trading Signals:\n"
-            for signal in signals:
-                summary += f"- {signal.signal}: {signal.reasoning} (Confidence: {signal.confidence:.1%})\n"
-                
-        return summary
-
-    def analyze(self, request: TechnicalAnalysisRequest) -> TechnicalAnalysisResponse:
-        df = self._convert_to_dataframe(request.market_data)
-        indicators_result = {}
-        signals_result = {}
-
-        for indicator in request.indicators:
-            if indicator in self.indicators:
-                indicators_result[indicator] = self.indicators[indicator](df, request.parameters)
-
-        latest_data = df.iloc[-1]
-        return TechnicalAnalysisResponse(
-            ticker=latest_data.name,
-            timestamp=latest_data.name,
-            indicators=indicators_result,
-            signals=signals_result
-        )
-
-    def calculate_moving_averages(self, request: MovingAverageRequest) -> MovingAverageResponse:
-        """이동평균 계산"""
-        try:
-            # Convert market data to numpy array
-            prices = np.array([data.close for data in request.market_data])
-            
-            sma_values = {}
-            ema_values = {}
-            
-            for window in request.window_sizes:
-                if "sma" in request.ma_types:
-                    sma = self._calculate_sma(prices, window)
-                    sma_values[f"sma_{window}"] = float(sma[-1])
-                
-                if "ema" in request.ma_types:
-                    ema = self._calculate_ema(prices, window)
-                    ema_values[f"ema_{window}"] = float(ema[-1])
-            
-            trend = self._determine_trend_direction(prices)
-            
-            return MovingAverageResponse(
-                sma_values=sma_values,
-                ema_values=ema_values,
-                trend_direction=trend,
-                error_message=None
-            )
-        except Exception as e:
-            return MovingAverageResponse(
-                sma_values={},
-                ema_values={},
-                trend_direction=TrendDirection.SIDEWAYS,
-                error_message=str(e)
-            )
-
-    def analyze_support_resistance(self, request: SupportResistanceRequest) -> Dict:
-        df = self._convert_to_dataframe(request.market_data)
-        highs = df["high"].rolling(window=request.lookback_period).max()
-        lows = df["low"].rolling(window=request.lookback_period).min()
-        
-        return {
-            "support_levels": self._find_support_levels(df, request.min_touches),
-            "resistance_levels": self._find_resistance_levels(df, request.min_touches)
-        }
-
-    def analyze_patterns(self, request: PatternRequest) -> PatternResponse:
-        """차트 패턴 분석"""
-        try:
-            patterns = {}
-            for pattern_type in request.pattern_types:
-                if pattern_type in ["double_top", "double_bottom", "head_shoulders"]:
-                    patterns[pattern_type] = Pattern(
-                        type=pattern_type,
-                        confidence=0.8,
-                        timestamp=datetime.now().isoformat()
-                    )
-            
-            return PatternResponse(
-                patterns=patterns,
-                timestamp=datetime.now().isoformat(),
-                error_message=None
-            )
-        except Exception as e:
-            return PatternResponse(
-                patterns={},
-                timestamp=datetime.now().isoformat(),
-                error_message=str(e)
-            )
-
-    def generate_signals(self, request: SignalRequest) -> SignalResponse:
-        """트레이딩 신호 생성"""
-        try:
-            signals = {}
-            for signal_type in request.signal_types:
-                if signal_type in ["trend_following", "mean_reversion", "breakout"]:
-                    signal = self._generate_signal(request.market_data, signal_type)
-                    signals[signal_type] = signal
-            
-            return SignalResponse(
-                signals=signals,
-                timestamp=datetime.now().isoformat(),
-                error_message=None
-            )
-        except Exception as e:
-            return SignalResponse(
-                signals={},
-                timestamp=datetime.now().isoformat(),
-                error_message=str(e)
-            )
-
-    def _generate_signal(self, market_data: List[MarketData], signal_type: str) -> Signal:
-        prices = np.array([data.close for data in market_data])
-        
-        if len(prices) < 2:
-            return Signal(signal="NEUTRAL", strength="WEAK")
-        
-        if signal_type == "trend_following":
-            return self._generate_trend_signal(prices)
-        elif signal_type == "mean_reversion":
-            return self._generate_reversion_signal(prices)
-        elif signal_type == "breakout":
-            return self._generate_breakout_signal(prices)
-        
-        return Signal(signal="NEUTRAL", strength="WEAK")
-
     def _determine_trend_direction(self, prices: np.ndarray) -> TrendDirection:
         if len(prices) < 2:
             return TrendDirection.SIDEWAYS
@@ -629,17 +923,6 @@ class TechnicalAnalyzer:
         elif price_change < -0.02:  # -2% threshold for downtrend
             return TrendDirection.DOWN
         return TrendDirection.SIDEWAYS
-
-    def _detect_pattern(self, market_data: List[MarketData], pattern_type: str) -> Optional[Pattern]:
-        prices = np.array([data.close for data in market_data])
-        
-        if pattern_type == "double_top":
-            return self._detect_double_top(prices)
-        elif pattern_type == "double_bottom":
-            return self._detect_double_bottom(prices)
-        elif pattern_type == "head_shoulders":
-            return self._detect_head_shoulders(prices)
-        return None
 
     def _calculate_sma(self, prices: np.ndarray, window: int) -> np.ndarray:
         return np.convolve(prices, np.ones(window)/window, mode='valid')
@@ -675,14 +958,6 @@ class TechnicalAnalyzer:
             "signal": signal_line.iloc[-1],
             "histogram": macd_line.iloc[-1] - signal_line.iloc[-1]
         }
-
-    def _find_support_levels(self, df: pd.DataFrame, min_touches: int) -> List[float]:
-        # 간단한 구현을 위해 최근 저점들을 반환
-        return sorted(df["low"].nsmallest(3).tolist())
-
-    def _find_resistance_levels(self, df: pd.DataFrame, min_touches: int) -> List[float]:
-        # 간단한 구현을 위해 최근 고점들을 반환
-        return sorted(df["high"].nlargest(3).tolist())
 
     def _detect_double_top(self, prices: np.ndarray) -> Optional[Pattern]:
         """더블 탑 패턴 감지"""
@@ -794,3 +1069,63 @@ class TechnicalAnalyzer:
             return Signal(signal="SELL", strength="STRONG")
         else:
             return Signal(signal="NEUTRAL", strength="WEAK") 
+
+    def propose(self, context):
+        """
+        자신의 기술적 분석 결과를 의견으로 제시합니다.
+        """
+        symbol = context.get('symbol', '005930')
+        analysis = self.analyze(symbol)
+        # 기존 summary 대신 주요 지표 기반으로 동적 판단
+        decision = 'HOLD'
+        confidence = 0.5
+        reason = '기술적 분석 결과'
+        if analysis:
+            rsi = analysis.get('RSI')
+            main_signal = analysis.get('main_signal')
+            if rsi is not None:
+                try:
+                    rsi_val = float(rsi)
+                    if rsi_val > 80:
+                        decision = 'SELL'
+                        confidence = min(1.0, (rsi_val-70)/30)
+                        reason = f'RSI 과매수({rsi_val:.2f})'
+                    elif rsi_val < 30:
+                        decision = 'BUY'
+                        confidence = min(1.0, (30-rsi_val)/30)
+                        reason = f'RSI 과매도({rsi_val:.2f})'
+                    else:
+                        if main_signal:
+                            decision = main_signal.upper()
+                            confidence = 0.7
+                            reason = f'주요 신호: {main_signal}'
+                        else:
+                            decision = 'HOLD'
+                            confidence = 0.5
+                            reason = 'RSI 중립'
+                except Exception:
+                    if main_signal:
+                        decision = main_signal.upper()
+                        confidence = 0.7
+                        reason = f'주요 신호: {main_signal}'
+            elif main_signal:
+                decision = main_signal.upper()
+                confidence = 0.7
+                reason = f'주요 신호: {main_signal}'
+        return {
+            'agent': 'technical_analyzer',
+            'decision': decision,
+            'confidence': confidence,
+            'reason': reason
+        }
+
+    def debate(self, context, others_opinions):
+        """
+        타 에이전트 의견을 참고해 자신의 의견을 보완/수정합니다.
+        """
+        my_opinion = self.propose(context)
+        # 예시: 타 에이전트가 모두 SELL이면 본인도 보수적으로 HOLD로 수정
+        if all(op['decision'] == 'SELL' for op in others_opinions):
+            my_opinion['decision'] = 'HOLD'
+            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
+        return my_opinion 

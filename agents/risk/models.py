@@ -2,6 +2,8 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
 from enum import Enum
 from datetime import datetime
+from dataclasses import dataclass
+import pandas as pd
 
 class RiskLevel(str, Enum):
     LOW = "low"
@@ -54,21 +56,26 @@ class PositionAdjustment(BaseModel):
     action: str  # "INCREASE", "DECREASE", "HOLD"
     reason: str
 
-class RiskAssessmentRequest(BaseModel):
-    strategy_id: str
-    portfolio_value: float
-    positions: List[Position]
-    risk_tolerance: float = Field(..., ge=0, le=1)
-    market_conditions: Optional[Dict] = None
-    target_beta: Optional[float] = None
-    max_position_size: Optional[float] = Field(None, gt=0, le=1)
-    max_sector_exposure: Optional[float] = Field(None, gt=0, le=1)
+@dataclass
+class RiskAssessmentRequest:
+    """리스크 평가 요청 모델"""
+    market_data: pd.DataFrame
+    technical_indicators: Dict
+    risk_tolerance: float = 0.5
+    portfolio_value: float = 1000000.0
+    positions: Optional[List[Dict]] = None
+    market_context: Optional[Dict] = None
+    timestamp: str = datetime.now().isoformat()
 
-class RiskAssessmentResponse(BaseModel):
+@dataclass
+class RiskAssessmentResponse:
+    """리스크 평가 응답 모델"""
+    volatility: float
+    risk_score: float
     risk_level: RiskLevel
-    portfolio_stats: PortfolioStats
-    risk_metrics: RiskMetrics
-    risk_alerts: List[RiskAlert]
-    position_adjustments: List[PositionAdjustment]
-    timestamp: datetime = Field(default_factory=datetime.now)
-    explanation: str 
+    max_loss_potential: float
+    suggested_position_size: float
+    stop_loss: float
+    target_price: float
+    risk_management_strategies: List[str]
+    timestamp: str 
