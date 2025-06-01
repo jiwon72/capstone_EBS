@@ -417,25 +417,61 @@ class StrategyGenerator:
         """
         자신의 전략 결과를 의견으로 제시합니다.
         """
-        # 예시: context에서 market_conditions를 받아 전략 생성
         market_conditions = context.get('market_conditions', None)
         strategy = self.generate_strategy(user_input="", market_conditions=market_conditions)
-        decision = strategy.recommended_strategy if hasattr(strategy, 'recommended_strategy') else 'HOLD'
-        confidence = getattr(strategy, 'confidence', 0.5)
+        trend = market_conditions.market_trend if market_conditions else 'neutral'
+        volatility = getattr(market_conditions, 'volatility_level', 'medium') if market_conditions else 'medium'
+        strategy_type = getattr(strategy, 'strategy_type', None)
+        decision = 'HOLD'
+        confidence = 0.5
+        reasons = []
+        if strategy_type and hasattr(strategy_type, 'value'):
+            stype = strategy_type.value.lower()
+            if stype == 'momentum' and trend == 'bullish' and volatility == 'low':
+                decision = 'BUY'
+                confidence = 0.8
+                reasons.append('모멘텀+상승장+저변동성')
+            elif stype == 'trend_following' and trend == 'bullish':
+                decision = 'BUY'
+                confidence = 0.7
+                reasons.append('추세추종+상승장')
+            elif stype == 'mean_reversion' and trend == 'bearish' and volatility == 'high':
+                decision = 'SELL'
+                confidence = 0.8
+                reasons.append('역추세+하락장+고변동성')
+            elif stype == 'statistical_arbitrage' and trend == 'bearish':
+                decision = 'SELL'
+                confidence = 0.7
+                reasons.append('통계차익+하락장')
+            elif stype == 'breakout' and volatility == 'high':
+                decision = 'BUY'
+                confidence = 0.6
+                reasons.append('돌파+고변동성')
+            else:
+                decision = 'HOLD'
+                confidence = 0.5
+                reasons.append(f'전략: {stype}, 트렌드: {trend}, 변동성: {volatility}')
+        reason = ', '.join(reasons) if reasons else '전략 분석 결과'
         return {
             'agent': 'strategy_generator',
             'decision': decision,
             'confidence': confidence,
-            'reason': '전략 생성 결과'
+            'reason': reason
         }
 
-    def debate(self, context, others_opinions):
+    def debate(self, context, others_opinions, my_opinion_1st_round=None):
         """
         타 에이전트 의견을 참고해 자신의 의견을 보완/수정합니다.
         """
         my_opinion = self.propose(context)
-        # 예시: 타 에이전트가 모두 HOLD면 본인도 HOLD로 보정
-        if all(op['decision'] == 'HOLD' for op in others_opinions):
+        # 예시: 타 에이전트가 모두 BUY면 본인도 BUY, 모두 SELL이면 SELL, 모두 HOLD면 HOLD로 보정
+        if all(op['decision'] == 'BUY' for op in others_opinions):
+            my_opinion['decision'] = 'BUY'
+            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
+        elif all(op['decision'] == 'SELL' for op in others_opinions):
+            my_opinion['decision'] = 'SELL'
+            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
+        elif all(op['decision'] == 'HOLD' for op in others_opinions):
             my_opinion['decision'] = 'HOLD'
             my_opinion['reason'] += ' (타 에이전트 의견 반영)'
         return my_opinion 

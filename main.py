@@ -24,9 +24,13 @@ async def main():
     except KeyboardInterrupt:
         logger.info("사용자에 의해 시스템이 중지되었습니다.")
         await system_manager.stop_system()
+        logger.info("시스템 종료됨")
+        exit(0)
     except Exception as e:
         logger.error(f"시스템 실행 중 오류 발생: {str(e)}")
         await system_manager.stop_system()
+        logger.info("시스템 종료됨")
+        exit(1)
 
 if __name__ == "__main__":
     asyncio.run(main()) 

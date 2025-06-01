@@ -273,12 +273,6 @@ class RiskAnalyzer:
             )
             self.logger.info(f"리스크 점수: {risk_score:.2f}")
             
-            # 3. 최대 손실 가능성 계산 (로그/보고서에서 제외)
-            max_loss = self._calculate_max_loss(
-                request.market_data,
-                request.technical_indicators
-            )
-            
             # 4. 리스크 레벨 결정
             risk_level = self._determine_risk_level(risk_score)
             self.logger.info(f"리스크 레벨: {risk_level}")
@@ -310,7 +304,7 @@ class RiskAnalyzer:
                 risk_score=risk_score,
                 volatility=volatility,
                 risk_level=risk_level,
-                max_loss_potential=0.0,  # 또는 None, 실제 계산값이 필요하면 대입
+                max_loss_potential=0.0,  # 최대 손실 가능성은 사용하지 않음
                 suggested_position_size=position_size,
                 stop_loss=stop_loss,
                 target_price=target_price,
@@ -687,48 +681,45 @@ class RiskAnalyzer:
             self.logger.error(f"리스크 점수 계산 중 오류 발생: {str(e)}")
             return 50.0  # 기본값
 
-    def _calculate_max_loss(
-        self,
-        market_data: pd.DataFrame,
-        technical_indicators: Dict
-    ) -> float:
-        """최대 손실 가능성 계산"""
-        try:
-            if market_data is None or market_data.empty:
-                return None  # 데이터 없으면 None 반환
-            # 최근 20일 최대 낙폭
-            returns = market_data['Close'].pct_change().dropna()
-            if returns.empty:
-                return None
-            rolling_max = returns.expanding().max()
-            drawdowns = returns / rolling_max - 1
-            max_drawdown = abs(drawdowns.min()) * 100
-            # 기술적 지표 기반 조정
-            if technical_indicators:
-                if 'bb_lower' in technical_indicators and 'bb_middle' in technical_indicators:
-                    bb_range = (technical_indicators['bb_middle'] - technical_indicators['bb_lower']) / technical_indicators['bb_middle']
-                    max_drawdown = max(max_drawdown, bb_range * 100)
-            return min(max_drawdown, 100.0)  # 최대 100%로 제한
-        except Exception as e:
-            self.logger.error(f"최대 손실 가능성 계산 중 오류 발생: {str(e)}")
-            return None
-
     def propose(self, context):
         """
         자신의 리스크 분석 결과를 의견으로 제시합니다.
         """
-        # 예시: context에서 symbol을 받아 리스크 분석
         symbol = context.get('symbol', '005930')
-        # 실제 구현에서는 포트폴리오, 전략 등 더 많은 context 활용 가능
-        # 여기서는 간단히 기본값 반환
+        technical_indicators = context.get('technical_indicators', {})
+        market_data = context.get('market_data', None)
+        risk_score = 50.0
+        risk_level = 'MODERATE'
+        volatility = 0.0
+        if market_data is not None and hasattr(self, '_calculate_volatility'):
+            volatility = self._calculate_volatility(market_data)
+            risk_score = self._calculate_risk_score(volatility, market_data, technical_indicators)
+            risk_level_enum = self._determine_risk_level(risk_score)
+            risk_level = risk_level_enum.value if hasattr(risk_level_enum, 'value') else str(risk_level_enum)
+        decision = 'HOLD'
+        confidence = 0.5
+        reasons = []
+        if risk_score >= 70:
+            decision = 'SELL'
+            confidence = min(1.0, (risk_score-60)/40)
+            reasons.append(f'리스크 점수 {risk_score:.1f} (레벨: {risk_level}) - 리스크 과다, 변동성 {volatility:.2f}')
+        elif risk_score <= 30:
+            decision = 'BUY'
+            confidence = min(1.0, (40-risk_score)/40)
+            reasons.append(f'리스크 점수 {risk_score:.1f} (레벨: {risk_level}) - 리스크 낮음, 변동성 {volatility:.2f}')
+        else:
+            decision = 'HOLD'
+            confidence = 0.5
+            reasons.append(f'리스크 점수 {risk_score:.1f} (레벨: {risk_level}) - 중립, 변동성 {volatility:.2f}')
+        reason = ', '.join(reasons) if reasons else '리스크 분석 결과'
         return {
             'agent': 'risk_analyzer',
-            'decision': 'HOLD',
-            'confidence': 0.5,
-            'reason': '리스크 분석 결과(예시)'
+            'decision': decision,
+            'confidence': confidence,
+            'reason': reason
         }
 
-    def debate(self, context, others_opinions):
+    def debate(self, context, others_opinions, my_opinion_1st_round=None):
         """
         타 에이전트 의견을 참고해 자신의 의견을 보완/수정합니다.
         """

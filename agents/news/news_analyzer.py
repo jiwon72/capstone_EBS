@@ -290,24 +290,52 @@ class NewsAnalyzer:
         """
         symbol = context.get('symbol', '삼성전자')
         analysis = self.analyze_sentiment_for_stock(symbol)
-        # 예시: 감성 점수와 시장 영향도 기반 의견
-        sentiment_score = analysis.get('sentiment_score', 0.0) if analysis else 0.0
-        decision = 'BUY' if sentiment_score > 0.5 else 'SELL' if sentiment_score < -0.5 else 'HOLD'
+        sentiment_score = analysis.get('감성점수', 0.0) if analysis else 0.0
+        market_impact = analysis.get('시장영향도', 0.0) if analysis else 0.0
+        news_count = analysis.get('뉴스갯수', 0) if analysis else 0
+        decision = 'HOLD'
+        confidence = 0.5
+        reasons = []
+        # 감성점수와 시장영향도, 뉴스갯수 등 종합 판단
+        if sentiment_score is not None and market_impact is not None:
+            if sentiment_score > 0.5 and market_impact > 0.2 and news_count >= 5:
+                decision = 'BUY'
+                confidence = min(1.0, (sentiment_score + market_impact) / 2 + 0.2)
+                reasons.append(f'강한 긍정 뉴스({sentiment_score:.2f}), 시장영향도({market_impact:.2f}), 뉴스갯수 {news_count}건')
+            elif sentiment_score < -0.5 and market_impact < -0.2 and news_count >= 5:
+                decision = 'SELL'
+                confidence = min(1.0, abs(sentiment_score + market_impact) / 2 + 0.2)
+                reasons.append(f'강한 부정 뉴스({sentiment_score:.2f}), 시장영향도({market_impact:.2f}), 뉴스갯수 {news_count}건')
+            elif abs(sentiment_score) > 0.3 and news_count >= 3:
+                decision = 'HOLD'
+                confidence = min(0.7, abs(sentiment_score) + 0.1)
+                reasons.append(f'약한 뉴스 신호({sentiment_score:.2f}), 뉴스갯수 {news_count}건')
+            else:
+                decision = 'HOLD'
+                confidence = 0.5
+                reasons.append(f'분석 신호 약함({sentiment_score:.2f}, {market_impact:.2f}, 뉴스 {news_count}건)')
+        reason = ', '.join(reasons) if reasons else '뉴스 분석 결과'
         return {
             'agent': 'news_analyzer',
             'decision': decision,
-            'confidence': abs(sentiment_score),
-            'reason': f'뉴스 감성 점수 기반: {sentiment_score:.2f}'
+            'confidence': confidence,
+            'reason': reason
         }
 
-    def debate(self, context, others_opinions):
+    def debate(self, context, others_opinions, my_opinion_1st_round=None):
         """
         타 에이전트 의견을 참고해 자신의 의견을 보완/수정합니다.
         """
         my_opinion = self.propose(context)
-        # 예시: 타 에이전트가 모두 BUY면 본인도 BUY로 보정
+        # 예시: 타 에이전트가 모두 BUY면 본인도 BUY, 모두 SELL이면 SELL, 모두 HOLD면 HOLD로 보정
         if all(op['decision'] == 'BUY' for op in others_opinions):
             my_opinion['decision'] = 'BUY'
+            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
+        elif all(op['decision'] == 'SELL' for op in others_opinions):
+            my_opinion['decision'] = 'SELL'
+            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
+        elif all(op['decision'] == 'HOLD' for op in others_opinions):
+            my_opinion['decision'] = 'HOLD'
             my_opinion['reason'] += ' (타 에이전트 의견 반영)'
         return my_opinion
 

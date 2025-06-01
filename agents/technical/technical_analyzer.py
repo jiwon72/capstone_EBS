@@ -21,6 +21,7 @@ from sklearn.preprocessing import MinMaxScaler
 from keras.models import Sequential
 from keras.layers import LSTM, Dense, Dropout
 import warnings
+import time
 warnings.filterwarnings('ignore')
 
 class TechnicalAnalyzer:
@@ -78,6 +79,7 @@ class TechnicalAnalyzer:
         self.trends = {}
         self.volume_analysis = {}
         self.forecast = {}
+        self.analysis_cache = {}
         
     def analyze(self, symbol: str, period: str = "1y") -> Dict:
         """
@@ -149,7 +151,8 @@ class TechnicalAnalyzer:
                 'analysis_summary': self._generate_analysis_summary(
                     indicators, patterns, trend_analysis, volume_analysis, price_forecast
                 ),
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'raw_data': data  # 실제 시계열 데이터 포함
             }
             
             # 8. 매매 신호 출력
@@ -220,38 +223,49 @@ class TechnicalAnalyzer:
                 return pd.DataFrame()
         is_kor = symbol.isdigit() or symbol.endswith('.KS') or symbol.endswith('.KQ')
         try:
-            if is_kor:
-                from datetime import datetime, timedelta
-                today = datetime.today()
-                if period.endswith('y'):
-                    years = int(period[:-1])
-                    start = today - timedelta(days=365*years)
-                elif period.endswith('m'):
-                    months = int(period[:-1])
-                    start = today - timedelta(days=30*months)
-                elif period.endswith('d'):
-                    days = int(period[:-1])
-                    start = today - timedelta(days=days)
-                else:
-                    start = today - timedelta(days=365)
-                from_date = start.strftime('%d/%m/%Y')
-                to_date = today.strftime('%d/%m/%Y')
-                code = symbol.replace('.KS','').replace('.KQ','')
-                import investpy
-                data = investpy.get_stock_historical_data(stock=code, country='south korea', from_date=from_date, to_date=to_date)
-                if not data.empty:
-                    data.index = pd.to_datetime(data.index)
-                    return data
-                else:
-                    self.logger.warning(f"investpy로 {symbol} 데이터가 비어 있습니다.")
+            max_retries = 5
+            for attempt in range(max_retries + 1):
+                try:
+                    if is_kor:
+                        from datetime import datetime, timedelta
+                        today = datetime.today()
+                        if period.endswith('y'):
+                            years = int(period[:-1])
+                            start = today - timedelta(days=365*years)
+                        elif period.endswith('m'):
+                            months = int(period[:-1])
+                            start = today - timedelta(days=30*months)
+                        elif period.endswith('d'):
+                            days = int(period[:-1])
+                            start = today - timedelta(days=days)
+                        else:
+                            start = today - timedelta(days=365)
+                        from_date = start.strftime('%d/%m/%Y')
+                        to_date = today.strftime('%d/%m/%Y')
+                        code = symbol.replace('.KS','').replace('.KQ','')
+                        import investpy
+                        data = investpy.get_stock_historical_data(stock=code, country='south korea', from_date=from_date, to_date=to_date)
+                        if not data.empty:
+                            data.index = pd.to_datetime(data.index)
+                            return data
+                        else:
+                            self.logger.warning(f"investpy로 {symbol} 데이터가 비어 있습니다.")
+                            return pd.DataFrame()
+                    else:
+                        import yfinance as yf
+                        data = yf.download(symbol, period=period)
+                        if data.empty:
+                            self.logger.warning(f"yfinance로 {symbol} 데이터가 비어 있습니다.")
+                            return pd.DataFrame()
+                        return data
+                except Exception as e:
+                    err_msg = str(e)
+                    if ("403" in err_msg or "ERR#0015" in err_msg) and attempt < max_retries:
+                        self.logger.warning(f"{symbol} 데이터 수집 403 에러 발생, {attempt+1}회 재시도...")
+                        time.sleep(2)
+                        continue
+                    self.logger.error(f"데이터 수집 실패: {err_msg}")
                     return pd.DataFrame()
-            else:
-                import yfinance as yf
-                data = yf.download(symbol, period=period)
-                if data.empty:
-                    self.logger.warning(f"yfinance로 {symbol} 데이터가 비어 있습니다.")
-                    return pd.DataFrame()
-                return data
         except Exception as e:
             self.logger.error(f"데이터 수집 실패: {str(e)}")
             return pd.DataFrame()
@@ -1075,43 +1089,142 @@ class TechnicalAnalyzer:
         자신의 기술적 분석 결과를 의견으로 제시합니다.
         """
         symbol = context.get('symbol', '005930')
-        analysis = self.analyze(symbol)
-        # 기존 summary 대신 주요 지표 기반으로 동적 판단
+        period = context.get('period', '1y')
+        timestamp = context.get('timestamp', None)
+        cache_key = (symbol, period, timestamp)
+        if cache_key in self.analysis_cache:
+            analysis = self.analysis_cache[cache_key]
+        else:
+            analysis = self.analyze(symbol, period)
+            self.analysis_cache[cache_key] = analysis
+
         decision = 'HOLD'
         confidence = 0.5
-        reason = '기술적 분석 결과'
+        reasons = []
+
         if analysis:
-            rsi = analysis.get('RSI')
-            main_signal = analysis.get('main_signal')
-            if rsi is not None:
-                try:
-                    rsi_val = float(rsi)
-                    if rsi_val > 80:
-                        decision = 'SELL'
-                        confidence = min(1.0, (rsi_val-70)/30)
-                        reason = f'RSI 과매수({rsi_val:.2f})'
-                    elif rsi_val < 30:
-                        decision = 'BUY'
-                        confidence = min(1.0, (30-rsi_val)/30)
-                        reason = f'RSI 과매도({rsi_val:.2f})'
-                    else:
-                        if main_signal:
-                            decision = main_signal.upper()
-                            confidence = 0.7
-                            reason = f'주요 신호: {main_signal}'
-                        else:
-                            decision = 'HOLD'
-                            confidence = 0.5
-                            reason = 'RSI 중립'
-                except Exception:
-                    if main_signal:
-                        decision = main_signal.upper()
-                        confidence = 0.7
-                        reason = f'주요 신호: {main_signal}'
-            elif main_signal:
-                decision = main_signal.upper()
-                confidence = 0.7
-                reason = f'주요 신호: {main_signal}'
+            # 1. RSI, MACD
+            indicators = analysis.get('indicators', {})
+            rsi = indicators.get('rsi')
+            macd = indicators.get('macd')
+            macd_signal = indicators.get('macd_signal')
+            rsi_val = rsi.iloc[-1] if rsi is not None and hasattr(rsi, 'iloc') else None
+            macd_val = macd.iloc[-1] if macd is not None and hasattr(macd, 'iloc') else None
+            macd_signal_val = macd_signal.iloc[-1] if macd_signal is not None and hasattr(macd_signal, 'iloc') else None
+
+            # 2. 추세
+            trend = analysis.get('trend_analysis', {})
+            short_trend = trend.get('short_term_trend')
+            mid_trend = trend.get('mid_term_trend')
+            long_trend = trend.get('long_term_trend')
+            trend_strength = trend.get('trend_strength', 0)
+
+            # 3. 거래량
+            volume = analysis.get('volume_analysis', {})
+            volume_trend = volume.get('volume_trend')
+            volume_ratio = volume.get('volume_ratio')
+
+            # 4. 시계열 예측
+            forecast = analysis.get('price_forecast', {})
+            forecast_prices = forecast.get('forecast_prices', [])
+            current_price = analysis.get('current_price')
+            price_trend = None
+            if forecast_prices and current_price is not None:
+                future_price = forecast_prices[-1]
+                if future_price > current_price * 1.01:
+                    price_trend = 'UP'
+                elif future_price < current_price * 0.99:
+                    price_trend = 'DOWN'
+                else:
+                    price_trend = 'SIDEWAYS'
+
+            # 종합 판단 로직
+            buy_score = 0
+            sell_score = 0
+            hold_score = 0
+
+            # RSI
+            if rsi_val is not None:
+                if rsi_val < 30:
+                    buy_score += 2
+                    reasons.append(f'RSI 과매도({rsi_val:.2f})')
+                elif rsi_val > 70:
+                    sell_score += 2
+                    reasons.append(f'RSI 과매수({rsi_val:.2f})')
+                else:
+                    hold_score += 1
+                    reasons.append(f'RSI 중립({rsi_val:.2f})')
+
+            # MACD
+            if macd_val is not None and macd_signal_val is not None:
+                if macd_val > macd_signal_val and macd_val > 0:
+                    buy_score += 1
+                    reasons.append(f'MACD 골든크로스({macd_val:.2f} > {macd_signal_val:.2f})')
+                elif macd_val < macd_signal_val and macd_val < 0:
+                    sell_score += 1
+                    reasons.append(f'MACD 데드크로스({macd_val:.2f} < {macd_signal_val:.2f})')
+                else:
+                    hold_score += 1
+                    reasons.append('MACD 중립')
+
+            # 추세
+            if short_trend == 'UP':
+                buy_score += 1
+                reasons.append('단기 추세 상승')
+            elif short_trend == 'DOWN':
+                sell_score += 1
+                reasons.append('단기 추세 하락')
+            if mid_trend == 'UP':
+                buy_score += 1
+                reasons.append('중기 추세 상승')
+            elif mid_trend == 'DOWN':
+                sell_score += 1
+                reasons.append('중기 추세 하락')
+            if long_trend == 'UP':
+                buy_score += 1
+                reasons.append('장기 추세 상승')
+            elif long_trend == 'DOWN':
+                sell_score += 1
+                reasons.append('장기 추세 하락')
+            if trend_strength > 25:
+                reasons.append(f'추세 강도 강함({trend_strength:.2f})')
+            else:
+                reasons.append(f'추세 강도 약함({trend_strength:.2f})')
+
+            # 거래량
+            if volume_trend == 'UP' and volume_ratio is not None and volume_ratio > 1.2:
+                buy_score += 1
+                reasons.append(f'거래량 증가({volume_ratio:.2f}배)')
+            elif volume_trend == 'DOWN' and volume_ratio is not None and volume_ratio < 0.8:
+                sell_score += 1
+                reasons.append(f'거래량 감소({volume_ratio:.2f}배)')
+            else:
+                hold_score += 1
+                reasons.append('거래량 중립')
+
+            # 시계열 예측
+            if price_trend == 'UP':
+                buy_score += 1
+                reasons.append('시계열 예측: 상승')
+            elif price_trend == 'DOWN':
+                sell_score += 1
+                reasons.append('시계열 예측: 하락')
+            else:
+                hold_score += 1
+                reasons.append('시계열 예측: 횡보')
+
+            # 최종 결정
+            if buy_score > sell_score and buy_score > hold_score:
+                decision = 'BUY'
+                confidence = min(1.0, 0.5 + 0.1 * buy_score)
+            elif sell_score > buy_score and sell_score > hold_score:
+                decision = 'SELL'
+                confidence = min(1.0, 0.5 + 0.1 * sell_score)
+            else:
+                decision = 'HOLD'
+                confidence = 0.5
+
+        reason = ', '.join(reasons) if reasons else '기술적 분석 결과'
         return {
             'agent': 'technical_analyzer',
             'decision': decision,
@@ -1119,13 +1232,23 @@ class TechnicalAnalyzer:
             'reason': reason
         }
 
-    def debate(self, context, others_opinions):
+    def debate(self, context, others_opinions, my_opinion_1st_round=None):
         """
         타 에이전트 의견을 참고해 자신의 의견을 보완/수정합니다.
+        1라운드 의견(my_opinion_1st_round)이 있으면 재분석 없이 그것을 사용합니다.
         """
-        my_opinion = self.propose(context)
-        # 예시: 타 에이전트가 모두 SELL이면 본인도 보수적으로 HOLD로 수정
+        if my_opinion_1st_round is not None:
+            my_opinion = dict(my_opinion_1st_round)
+        else:
+            my_opinion = self.propose(context)
+        # 예시: 타 에이전트가 모두 SELL이면 본인도 SELL, 모두 BUY면 BUY, 모두 HOLD면 HOLD로 보정
         if all(op['decision'] == 'SELL' for op in others_opinions):
+            my_opinion['decision'] = 'SELL'
+            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
+        elif all(op['decision'] == 'BUY' for op in others_opinions):
+            my_opinion['decision'] = 'BUY'
+            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
+        elif all(op['decision'] == 'HOLD' for op in others_opinions):
             my_opinion['decision'] = 'HOLD'
             my_opinion['reason'] += ' (타 에이전트 의견 반영)'
         return my_opinion 

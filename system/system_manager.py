@@ -146,10 +146,13 @@ class SystemManager:
                     self.logger.error("종목 데이터가 없습니다. 기본 종목 리스트로 대체합니다.")
                     target_symbols = [self.current_symbol]
 
+                # 분석 성공 종목만 append할 리스트
                 news_analyses = []
                 strategy_results = []
                 technical_analyses = []
                 risk_analyses = []
+                debate_results_all = []
+                target_symbols_filtered = []
 
                 for symbol in target_symbols:
                     self.logger.info(f"[{symbol}] 뉴스 분석 시작")
@@ -158,7 +161,6 @@ class SystemManager:
                         self.logger.warning(f"[{symbol}] 뉴스 분석 실패 또는 결과 없음. 이후 분석 건너뜀.")
                         continue
                     self.logger.info(f"[{symbol}] 뉴스 분석 완료")
-                    news_analyses.append(news)
                     # MarketCondition 객체 변환
                     market_trend = 'neutral'
                     if isinstance(news, dict):
@@ -182,19 +184,23 @@ class SystemManager:
                         risk_tolerance=0.5,
                         time_horizon=TimeHorizon.MEDIUM_TERM
                     )
-                    strategy_results.append(strategy)
                     self.logger.info(f"[{symbol}] 전략 분석 완료")
                     self.logger.info(f"[{symbol}] 기술적 분석 시작")
-                    tech = self.technical_analyzer.analyze(symbol)
-                    technical_analyses.append(tech)
+                    # 기술적 분석 시 데이터 수집 403 에러 재시도 횟수를 5회로 늘리기 위해 인자 전달(가능하다면)
+                    try:
+                        # analyze 함수가 retry_count 인자를 지원한다면 아래처럼 호출
+                        tech = self.technical_analyzer.analyze(symbol, retry_count=5)
+                    except TypeError:
+                        # analyze 함수가 retry_count 인자를 지원하지 않으면 기존 방식대로 호출
+                        # (내부에서 재시도 횟수 수정 필요)
+                        tech = self.technical_analyzer.analyze(symbol)
+                    if not tech or not isinstance(tech, dict) or tech.get('raw_data') is None or tech.get('raw_data').empty:
+                        self.logger.warning(f"[{symbol}] 기술적 분석 실패 또는 데이터 없음. 이후 분석 건너뜀.")
+                        continue
                     self.logger.info(f"[{symbol}] 기술적 분석 완료")
                     self.logger.info(f"[{symbol}] 리스크 분석 시작")
-                    if tech and isinstance(tech, dict):
-                        market_data = tech.get('raw_data', pd.DataFrame())
-                        technical_indicators = tech.get('indicators', {})
-                    else:
-                        market_data = pd.DataFrame()
-                        technical_indicators = {}
+                    market_data = tech.get('raw_data', pd.DataFrame())
+                    technical_indicators = tech.get('indicators', {})
                     risk = self.risk_analyzer.assess_risk(
                         request=RiskAssessmentRequest(
                             market_data=market_data,
@@ -205,19 +211,80 @@ class SystemManager:
                             market_context=None
                         )
                     )
-                    risk_analyses.append(risk)
+                    if not risk:
+                        self.logger.warning(f"[{symbol}] 리스크 분석 실패. 이후 분석 건너뜀.")
+                        continue
                     self.logger.info(f"[{symbol}] 리스크 분석 완료")
+                    # 모든 분석이 성공한 경우에만 append
+                    news_analyses.append(news)
+                    strategy_results.append(strategy)
+                    technical_analyses.append(tech)
+                    risk_analyses.append(risk)
+                    target_symbols_filtered.append(symbol)
 
-                # 2. 보고서 생성 (분석 결과 집계)
+                # 2. 종목별 debate 결과 기반 top5 선정 (재분석 없이 이미 분석된 결과만 사용)
+                symbol_scores = []
+                for i in range(len(news_analyses)):
+                    # 디베이트는 아직 실행하지 않음
+                    buy_count = 0
+                    confidence_sum = 0.0
+                    symbol_scores.append((i, buy_count, confidence_sum))
+                # top5 선정은 기존대로(임시로 buy_count, confidence_sum 0)
+                symbol_scores = [(i, 0, 0.0) for i in range(len(news_analyses))]
+                top5 = symbol_scores[:5]
+                top5_indices = [x[0] for x in top5]
+                # top5만 추출
+                top5_symbols = [target_symbols_filtered[i] for i in top5_indices]
+                top5_news = [news_analyses[i] for i in top5_indices]
+                top5_strategies = [strategy_results[i] for i in top5_indices]
+                top5_risks = [risk_analyses[i] for i in top5_indices]
+                top5_techs = [technical_analyses[i] for i in top5_indices]
+
+                # top5 종목별로 context를 만들어 한 번에 디베이트
+                now_ts = datetime.now().isoformat()
+                top5_debates = []
+                for idx, symbol in enumerate(top5_symbols):
+                    news = top5_news[idx]
+                    market_trend = 'neutral'
+                    if isinstance(news, dict):
+                        impact = news.get('시장영향도', 0.0)
+                        if impact > 0:
+                            market_trend = 'bullish'
+                        elif impact < 0:
+                            market_trend = 'bearish'
+                    market_condition_obj = MarketCondition(
+                        market_trend=market_trend,
+                        volatility_level='high' if news.get('뉴스갯수', 0) >= 10 else 'low',
+                        trading_volume=0.0,
+                        sector_performance={},
+                        major_events=[],
+                        timestamp=datetime.now()
+                    )
+                    debate_context = {
+                        'symbol': symbol,
+                        'market_conditions': market_condition_obj,
+                        'period': '1y',
+                        'timestamp': now_ts,
+                        'technical_indicators': top5_techs[idx].get('indicators', {}) if idx < len(top5_techs) else {},
+                        'market_data': top5_techs[idx].get('raw_data', None) if idx < len(top5_techs) else None
+                    }
+                    debate_opinions = self.agent_debate_round(debate_context)
+                    top5_debates.append(debate_opinions)
+
+                # 3. 보고서 생성 (top5만)
                 await self._generate_investment_report(
-                    target_symbols,
-                    news_analyses,
-                    strategy_results,
-                    risk_analyses,
-                    technical_analyses
+                    top5_symbols,
+                    top5_news,
+                    top5_strategies,
+                    top5_risks,
+                    top5_techs,
+                    top5_debates
                 )
+                # top5 선정 및 보고서 생성 후 루프 종료
+                self.is_running = False
+                return
 
-                # 3. 상태 업데이트 및 대기
+                # 4. 상태 업데이트 및 대기
                 self.last_analysis_time = datetime.now()
                 await self._wait_for_next_analysis()
 
@@ -240,83 +307,53 @@ class SystemManager:
             return
         client = openai.OpenAI(api_key=api_key)
 
-        def make_table(rows, columns):
+        def make_table(rows, columns, code_to_name=None):
             table = '| ' + ' | '.join(columns) + ' |\n'
             table += '| ' + ' | '.join(['---']*len(columns)) + ' |\n'
             for row in rows:
+                # row가 dict가 아니면 dict로 변환
+                if not isinstance(row, dict):
+                    if hasattr(row, 'dict'):
+                        row = row.dict()
+                    elif hasattr(row, 'to_dict'):
+                        row = row.to_dict()
+                    else:
+                        row = {col: getattr(row, col, '') for col in columns}
+                # 종목 코드 → 종목명 변환
+                if code_to_name and '종목' in row:
+                    code = row['종목']
+                    name = code_to_name.get(code, code)
+                    row['종목'] = f"{name} ({code})"
                 table += '| ' + ' | '.join(str(row.get(col, '')) for col in columns) + ' |\n'
             return table
 
-        # 각 분석 결과를 표/리스트로 요약
-        news_rows = []
-        for symbol, news in zip(symbols, news_analyses):
-            if isinstance(news, dict):
-                sentiment_score = news.get('sentiment_score', 'N/A')
-                market_impact = news.get('시장영향도', 'N/A')
-                keywords = ','.join(news.get('keywords', [])) if 'keywords' in news else ''
-            else:
-                sentiment_score = getattr(news, 'sentiment_score', 'N/A')
-                market_impact = getattr(news, '시장영향도', 'N/A')
-                keywords = ','.join(getattr(news, 'keywords', [])) if hasattr(news, 'keywords') else ''
-            news_rows.append({
-                '종목': symbol,
-                '감성점수': sentiment_score,
-                '시장영향도': market_impact,
-                '키워드': keywords
-            })
-        news_table = make_table(news_rows, ['종목', '감성점수', '시장영향도', '키워드'])
+        # 종목코드→종목명 매핑 생성
+        code_to_name = {code: self._get_stock_name(code) for code in symbols}
 
-        strategy_rows = []
-        for symbol, strat in zip(symbols, strategies):
-            if isinstance(strat, dict):
-                recommendation = strat.get('recommendation', strat.get('strategy_type', 'N/A'))
-                explanation = strat.get('explanation', '')
-            else:
-                recommendation = getattr(strat, 'strategy_type', 'N/A')
-                explanation = getattr(strat, 'explanation', '')
-            strategy_rows.append({
-                '종목': symbol,
-                '추천전략': recommendation,
-                '설명': explanation
-            })
-        strategy_table = make_table(strategy_rows, ['종목', '추천전략', '설명'])
+        # 각 분석 결과를 표/리스트로 요약 (상위 5개만)
+        news_rows = news_analyses[:5]
+        strategy_rows = strategies[:5]
+        risk_rows = risk_analyses[:5]
+        tech_rows = technical_analyses[:5]
+        news_table = make_table(news_rows, ['종목', '감성점수', '시장영향도', '키워드'], code_to_name)
+        strategy_table = make_table(strategy_rows, ['종목', '추천전략', '설명'], code_to_name)
+        risk_table = make_table(risk_rows, ['종목', '리스크점수', '변동성', '리스크레벨'], code_to_name)
+        tech_table = make_table(tech_rows, ['종목', 'RSI', 'MACD', '볼린저밴드상단', '볼린저밴드하단', '최근종가'], code_to_name)
 
-        risk_rows = []
+        # 종목별 요약 설명 생성
+        def make_summary_rows(symbols, news_analyses):
+            summary_lines = []
+            for code, news in zip(symbols, news_analyses):
+                name = code_to_name.get(code, code)
+                keywords = news.get('키워드', '') if isinstance(news, dict) else ''
+                impact = news.get('시장영향도', '') if isinstance(news, dict) else ''
+                summary_lines.append(f"- **{name} ({code})**: 주요 키워드: {keywords}, 시장영향도: {impact}")
+            return '\n'.join(summary_lines)
+        news_summary = make_summary_rows(symbols[:5], news_analyses[:5])
+
+        # 리스크 분석 결과 디버깅용 로그
         for symbol, risk in zip(symbols, risk_analyses):
-            if isinstance(risk, dict):
-                risk_score = risk.get('risk_score', 'N/A')
-                volatility = risk.get('volatility', 'N/A')
-                risk_level = risk.get('risk_level', 'N/A')
-            else:
-                risk_score = getattr(risk, 'risk_score', 'N/A')
-                volatility = getattr(risk, 'volatility', 'N/A')
-                risk_level = getattr(risk, 'risk_level', 'N/A')
-            risk_rows.append({
-                '종목': symbol,
-                '리스크점수': risk_score,
-                '변동성': volatility,
-                '리스크레벨': risk_level
-            })
-        risk_table = make_table(risk_rows, ['종목', '리스크점수', '변동성', '리스크레벨'])
-
-        tech_rows = []
-        for symbol, tech in zip(symbols, technical_analyses):
-            tech_row = {'종목': symbol}
-            if isinstance(tech, dict):
-                tech_row['RSI'] = tech.get('indicators', {}).get('rsi', 'N/A')
-                tech_row['MACD'] = tech.get('indicators', {}).get('macd', 'N/A')
-                tech_row['볼린저밴드상단'] = tech.get('indicators', {}).get('bb_upper', 'N/A')
-                tech_row['볼린저밴드하단'] = tech.get('indicators', {}).get('bb_lower', 'N/A')
-                tech_row['최근종가'] = tech.get('current_price', 'N/A')
-            else:
-                indicators = getattr(tech, 'indicators', {}) if hasattr(tech, 'indicators') else {}
-                tech_row['RSI'] = indicators.get('rsi', 'N/A') if isinstance(indicators, dict) else 'N/A'
-                tech_row['MACD'] = indicators.get('macd', 'N/A') if isinstance(indicators, dict) else 'N/A'
-                tech_row['볼린저밴드상단'] = indicators.get('bb_upper', 'N/A') if isinstance(indicators, dict) else 'N/A'
-                tech_row['볼린저밴드하단'] = indicators.get('bb_lower', 'N/A') if isinstance(indicators, dict) else 'N/A'
-                tech_row['최근종가'] = getattr(tech, 'current_price', 'N/A')
-            tech_rows.append(tech_row)
-        tech_table = make_table(tech_rows, ['종목', 'RSI', 'MACD', '볼린저밴드상단', '볼린저밴드하단', '최근종가'])
+            self.logger.info(f"[DEBUG] {symbol} 리스크 분석 결과: {risk}")
 
         # debate 결과 기반 포트폴리오 비중 산출 함수
         def _calculate_portfolio_allocation(symbols, debate_results):
@@ -351,7 +388,7 @@ class SystemManager:
         portfolio_rows.append({'자산': '현금', '비율': f"{int(cash_ratio*100)}%"})
         portfolio_table = make_table(portfolio_rows, ['자산', '비율'])
 
-        # 프롬프트 템플릿(7번 삭제, 6번 뒤에 최종 포트폴리오 표 추가)
+        # 프롬프트 템플릿(6번 항목에 LLM이 직접 논리적 이유와 기대효과를 작성하도록 지시)
         prompt = f"""
         국내 주식 자동매매 시스템에서 최근 거래량이 가장 많은 상위 10개 종목을 대상으로, 아래 항목별로 포트폴리오 투자 분석 보고서를 작성하세요.
 
@@ -362,6 +399,7 @@ class SystemManager:
         {strategy_table}
         2. **뉴스/이슈 분석**
         {news_table}
+        {news_summary}
         3. **리스크 분석**
         {risk_table}
         4. **기술적 분석**
@@ -369,7 +407,7 @@ class SystemManager:
         5. **시계열(통계/머신러닝 기반) 분석**
         (각 종목별 시계열 예측 결과를 요약해 표로 정리)
         6. **포트폴리오 구성 이유 및 기대효과**
-        (상기 분석 결과를 종합하여, 상위 10개 종목 포트폴리오를 구성한 최종 이유와 기대 효과를 제시)
+        위 표와 분석 결과를 바탕으로, 각 종목의 선정 이유와 전체 포트폴리오의 기대효과를 논리적이고 구체적으로 작성하세요. (예: 각 종목이 포트폴리오에 포함된 근거, 산업/이슈/리스크/성장성 등 다양한 관점에서 설명, 분산투자 및 리스크 관리 효과, 기대 수익 등)
         
         **최종 포트폴리오 구성**
         {portfolio_table}
@@ -619,7 +657,8 @@ class SystemManager:
         for idx, agent in enumerate(agents):
             others = [op for i, op in enumerate(opinions) if i != idx]
             if hasattr(agent, 'debate'):
-                op = agent.debate(context, others)
+                # 1라운드 의견을 그대로 넘김
+                op = agent.debate(context, others, my_opinion_1st_round=opinions[idx])
                 self.logger.info(f"[디베이트][2R] {op.get('agent', agent.__class__.__name__)}: {op.get('decision')} (신뢰도: {op.get('confidence')}, 이유: {op.get('reason')})")
                 final_opinions.append(op)
             else:
