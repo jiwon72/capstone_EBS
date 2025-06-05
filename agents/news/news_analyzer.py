@@ -15,6 +15,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from agents.utils.logger import AgentLogger
+from agents.utils.call_openai_api import call_openai_api
 
 client_id = "jWYb81zpxwjjBOvjTlc1"
 client_secret = "CH69vSJ6hu"
@@ -323,21 +324,36 @@ class NewsAnalyzer:
         }
 
     def debate(self, context, others_opinions, my_opinion_1st_round=None):
-        """
-        타 에이전트 의견을 참고해 자신의 의견을 보완/수정합니다.
-        """
-        my_opinion = self.propose(context)
-        # 예시: 타 에이전트가 모두 BUY면 본인도 BUY, 모두 SELL이면 SELL, 모두 HOLD면 HOLD로 보정
-        if all(op['decision'] == 'BUY' for op in others_opinions):
-            my_opinion['decision'] = 'BUY'
-            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
-        elif all(op['decision'] == 'SELL' for op in others_opinions):
-            my_opinion['decision'] = 'SELL'
-            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
-        elif all(op['decision'] == 'HOLD' for op in others_opinions):
-            my_opinion['decision'] = 'HOLD'
-            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
-        return my_opinion
+        analysis = self.analyze_sentiment_for_stock(context['symbol'])
+        sentiment = analysis.get('감성점수', 0.0)
+        impact = analysis.get('시장영향도', 0.0)
+        news_count = analysis.get('뉴스갯수', 0)
+        핵심지표 = {"감성점수": sentiment, "시장영향도": impact, "뉴스갯수": news_count}
+        주장 = f"뉴스 감성점수 {sentiment:.2f}, 시장영향도 {impact:.2f}, 뉴스 {news_count}건."
+        if sentiment > 0.5 and impact > 0.2:
+            추천 = "BUY"
+            신뢰도 = 0.8
+            주장 += " 긍정적 뉴스가 많으므로 매수 추천."
+        elif sentiment < -0.5 and impact < -0.2:
+            추천 = "SELL"
+            신뢰도 = 0.8
+            주장 += " 부정적 뉴스가 많으므로 매도 추천."
+        else:
+            추천 = "HOLD"
+            신뢰도 = 0.5
+            주장 += " 중립적."
+        # OpenAI API로 전문가 설명 생성
+        prompt = f"""너는 뉴스 분석 전문가야. 아래 수치를 바탕으로 투자자에게 논리적으로 설명해줘.\n감성점수: {sentiment:.2f}, 시장영향도: {impact:.2f}, 뉴스갯수: {news_count}\n이 수치가 의미하는 바와 투자 판단에 미치는 영향, 추천 의견을 전문가답게 3~4문장으로 써줘."""
+        전문가설명 = call_openai_api(prompt)  # 실제 OpenAI API 호출 함수 필요
+        return {
+            "agent": "news_analyzer",
+            "분야": "뉴스",
+            "핵심지표": 핵심지표,
+            "주장": 주장,
+            "추천": 추천,
+            "신뢰도": 신뢰도,
+            "전문가설명": 전문가설명
+        }
 
 if __name__ == "__main__":
     analyzer = NewsAnalyzer()

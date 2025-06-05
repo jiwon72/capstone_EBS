@@ -10,6 +10,7 @@ from .models import (
     RiskAssessmentRequest
 )
 import logging
+from agents.utils.call_openai_api import call_openai_api
 
 class RiskAnalyzer:
     def __init__(self):
@@ -645,41 +646,119 @@ class RiskAnalyzer:
             self.logger.error(f"변동성 계산 중 오류 발생: {str(e)}")
             return 0.0
 
+    def _calculate_liquidity_score(self, market_data: pd.DataFrame) -> float:
+        """
+        유동성 점수 계산 (0~100)
+        - 일평균 거래대금, 스프레드 등 활용
+        """
+        try:
+            if market_data is None or market_data.empty or 'Volume' not in market_data.columns or 'Close' not in market_data.columns:
+                return 50.0
+            avg_volume = market_data['Volume'].tail(20).mean()
+            avg_price = market_data['Close'].tail(20).mean()
+            trading_value = avg_volume * avg_price
+            # 1억 미만: 0점, 100억 이상: 100점
+            score = (trading_value - 1e7) / (1e10 - 1e7) * 100
+            return max(0, min(score, 100))
+        except Exception as e:
+            self.logger.error(f"유동성 점수 계산 오류: {str(e)}")
+            return 50.0
+
+    def _calculate_financial_score(self, financials: dict) -> float:
+        """
+        재무 점수 계산 (0~100)
+        - 부채비율, 이자보상배율 등 활용
+        """
+        try:
+            if not financials:
+                return 50.0
+            debt_ratio = financials.get('debt_ratio', 100)
+            interest_coverage = financials.get('interest_coverage', 5)
+            # 부채비율 50% 이하: 100점, 300% 이상: 0점
+            debt_score = max(0, min((300 - debt_ratio) / 2.5, 100))
+            # 이자보상배율 10 이상: 100점, 1 이하: 0점
+            ic_score = max(0, min((interest_coverage - 1) / 9 * 100, 100))
+            score = 0.6 * debt_score + 0.4 * ic_score
+            return max(0, min(score, 100))
+        except Exception as e:
+            self.logger.error(f"재무 점수 계산 오류: {str(e)}")
+            return 50.0
+
+    def _calculate_market_score(self, market_data: pd.DataFrame, benchmark_returns: pd.Series = None) -> float:
+        """
+        시장 점수 계산 (0~100)
+        - 베타, 시장 상관계수 등 활용
+        """
+        try:
+            if market_data is None or market_data.empty or 'Close' not in market_data.columns:
+                return 50.0
+            returns = market_data['Close'].pct_change().dropna()
+            if benchmark_returns is not None and not benchmark_returns.empty:
+                # 베타 계산
+                beta = np.cov(returns, benchmark_returns[-len(returns):])[0,1] / np.var(benchmark_returns[-len(returns):])
+                # 베타 0.8~1.2: 100점, 2.0 이상: 0점
+                beta_score = max(0, min((2.0 - abs(beta - 1.0)) / 1.2 * 100, 100))
+            else:
+                beta_score = 50.0
+            # 시장 상관계수 (없으면 0.5)
+            corr = returns.corr(benchmark_returns) if benchmark_returns is not None and not benchmark_returns.empty else 0.5
+            # 상관계수 0.3~0.7: 100점, 1.0: 0점
+            corr_score = max(0, min((1.0 - abs(corr - 0.5)) / 0.5 * 100, 100))
+            score = 0.7 * beta_score + 0.3 * corr_score
+            return max(0, min(score, 100))
+        except Exception as e:
+            self.logger.error(f"시장 점수 계산 오류: {str(e)}")
+            return 50.0
+
     def _calculate_risk_score(
         self,
         volatility: float,
         market_data: pd.DataFrame,
-        technical_indicators: Dict
+        technical_indicators: Dict,
+        strategy_type: str = None,
+        liquidity_score: float = None,
+        financial_score: float = None,
+        market_score: float = None
     ) -> float:
-        """리스크 점수 계산"""
-        try:
-            # 기본 리스크 점수 (0-100)
-            base_score = min(volatility * 100, 100)
-            # 기술적 지표 기반 조정
-            if technical_indicators:
-                if 'rsi' in technical_indicators:
-                    rsi = technical_indicators['rsi']
-                    if isinstance(rsi, pd.Series):
-                        rsi = rsi.iloc[-1]
-                    if rsi > 70:  # 과매수
-                        base_score += 10
-                    elif rsi < 30:  # 과매도
-                        base_score -= 10
-                if 'macd' in technical_indicators and 'macd_signal' in technical_indicators:
-                    macd = technical_indicators['macd']
-                    macd_signal = technical_indicators['macd_signal']
-                    if isinstance(macd, pd.Series):
-                        macd = macd.iloc[-1]
-                    if isinstance(macd_signal, pd.Series):
-                        macd_signal = macd_signal.iloc[-1]
-                    if macd > macd_signal:
-                        base_score -= 5  # 상승 추세
-                    else:
-                        base_score += 5  # 하락 추세
-            return max(0, min(base_score, 100))  # 0-100 범위로 제한
-        except Exception as e:
-            self.logger.error(f"리스크 점수 계산 중 오류 발생: {str(e)}")
-            return 50.0  # 기본값
+        """
+        전략별 가중치를 적용한 리스크 점수 계산
+        """
+        # 전략별 가중치
+        weights = {
+            'momentum': {'volatility': 0.4, 'liquidity': 0.3, 'financial': 0.15, 'market': 0.15},
+            'growth':   {'volatility': 0.3, 'liquidity': 0.2, 'financial': 0.25, 'market': 0.25},
+            'value':    {'volatility': 0.2, 'liquidity': 0.25, 'financial': 0.3, 'market': 0.25},
+        }
+        stype = (strategy_type or 'momentum').lower()
+        w = weights.get(stype, weights['momentum'])
+        # 각 점수 산출 (없으면 0)
+        v = min(volatility * 100, 100) if volatility is not None else 0
+        l = min(liquidity_score, 100) if liquidity_score is not None else 0
+        f = min(financial_score, 100) if financial_score is not None else 0
+        m = min(market_score, 100) if market_score is not None else 0
+        base_score = v * w['volatility'] + l * w['liquidity'] + f * w['financial'] + m * w['market']
+        # 기술적 지표 기반 조정
+        if technical_indicators:
+            if 'rsi' in technical_indicators:
+                rsi = technical_indicators['rsi']
+                if isinstance(rsi, pd.Series):
+                    rsi = rsi.iloc[-1]
+                if rsi > 70:
+                    base_score += 10
+                elif rsi < 30:
+                    base_score -= 10
+            if 'macd' in technical_indicators and 'macd_signal' in technical_indicators:
+                macd = technical_indicators['macd']
+                macd_signal = technical_indicators['macd_signal']
+                if isinstance(macd, pd.Series):
+                    macd = macd.iloc[-1]
+                if isinstance(macd_signal, pd.Series):
+                    macd_signal = macd_signal.iloc[-1]
+                if macd > macd_signal:
+                    base_score -= 5
+                else:
+                    base_score += 5
+        return max(0, min(base_score, 100))
 
     def propose(self, context):
         """
@@ -720,12 +799,50 @@ class RiskAnalyzer:
         }
 
     def debate(self, context, others_opinions, my_opinion_1st_round=None):
-        """
-        타 에이전트 의견을 참고해 자신의 의견을 보완/수정합니다.
-        """
-        my_opinion = self.propose(context)
-        # 예시: 타 에이전트가 모두 BUY면 본인도 BUY로 보정
-        if all(op['decision'] == 'BUY' for op in others_opinions):
-            my_opinion['decision'] = 'BUY'
-            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
-        return my_opinion 
+        symbol = context.get('symbol', '005930')
+        technical_indicators = context.get('technical_indicators', {})
+        market_data = context.get('market_data', None)
+        strategy_type = context.get('strategy_type', None)
+        # 유동성/재무/시장 점수 산출(예시, 실제 적용시 context에서 받아야 함)
+        liquidity_score = context.get('liquidity_score', 50.0)
+        financial_score = context.get('financial_score', 50.0)
+        market_score = context.get('market_score', 50.0)
+        risk_score = 50.0
+        risk_level = 'MODERATE'
+        volatility = 0.0
+        if market_data is not None and hasattr(self, '_calculate_volatility'):
+            volatility = self._calculate_volatility(market_data)
+            risk_score = self._calculate_risk_score(
+                volatility, market_data, technical_indicators,
+                strategy_type=strategy_type,
+                liquidity_score=liquidity_score,
+                financial_score=financial_score,
+                market_score=market_score
+            )
+            risk_level_enum = self._determine_risk_level(risk_score)
+            risk_level = risk_level_enum.value if hasattr(risk_level_enum, 'value') else str(risk_level_enum)
+        핵심지표 = {"리스크점수": risk_score, "변동성": volatility, "리스크레벨": risk_level}
+        주장 = f"리스크 점수 {risk_score:.1f}, 변동성 {volatility:.2f}, 리스크레벨 {risk_level}. "
+        if risk_score >= 70:
+            추천 = "SELL"
+            신뢰도 = min(1.0, (risk_score-60)/40)
+            주장 += "리스크가 과다하므로 매도 추천."
+        elif risk_score <= 30:
+            추천 = "BUY"
+            신뢰도 = min(1.0, (40-risk_score)/40)
+            주장 += "리스크가 낮으므로 매수 추천."
+        else:
+            추천 = "HOLD"
+            신뢰도 = 0.5
+            주장 += "중립적."
+        prompt = f"""너는 리스크 관리 전문가야. 아래 수치를 바탕으로 투자자에게 논리적으로 설명해줘.\n리스크점수: {risk_score:.1f}, 변동성: {volatility:.2f}, 리스크레벨: {risk_level}\n이 수치가 의미하는 바와 투자 판단에 미치는 영향, 추천 의견을 전문가답게 3~4문장으로 써줘."""
+        전문가설명 = call_openai_api(prompt)
+        return {
+            "agent": "risk_analyzer",
+            "분야": "리스크",
+            "핵심지표": 핵심지표,
+            "주장": 주장,
+            "추천": 추천,
+            "신뢰도": 신뢰도,
+            "전문가설명": 전문가설명
+        } 

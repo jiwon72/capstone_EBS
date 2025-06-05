@@ -16,6 +16,7 @@ from .models import (
     EntryCondition, ExitCondition, RiskParameters,
     TechnicalIndicator, StrategyResponse
 )
+from agents.utils.call_openai_api import call_openai_api
 
 # 로거 설정
 logger = logging.getLogger(__name__)
@@ -460,18 +461,35 @@ class StrategyGenerator:
         }
 
     def debate(self, context, others_opinions, my_opinion_1st_round=None):
-        """
-        타 에이전트 의견을 참고해 자신의 의견을 보완/수정합니다.
-        """
-        my_opinion = self.propose(context)
-        # 예시: 타 에이전트가 모두 BUY면 본인도 BUY, 모두 SELL이면 SELL, 모두 HOLD면 HOLD로 보정
-        if all(op['decision'] == 'BUY' for op in others_opinions):
-            my_opinion['decision'] = 'BUY'
-            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
-        elif all(op['decision'] == 'SELL' for op in others_opinions):
-            my_opinion['decision'] = 'SELL'
-            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
-        elif all(op['decision'] == 'HOLD' for op in others_opinions):
-            my_opinion['decision'] = 'HOLD'
-            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
-        return my_opinion 
+        market_conditions = context.get('market_conditions', None)
+        strategy = self.generate_strategy(user_input="", market_conditions=market_conditions)
+        strategy_type = getattr(strategy, 'strategy_type', None)
+        entry_conditions = getattr(strategy, 'entry_conditions', [])
+        exit_conditions = getattr(strategy, 'exit_conditions', [])
+        risk_parameters = getattr(strategy, 'risk_parameters', None)
+        핵심지표 = {"전략": strategy_type.value if strategy_type else None, "진입조건": [ec.indicator for ec in entry_conditions], "청산조건": [ec.indicator for ec in exit_conditions], "리스크파라미터": risk_parameters.dict() if risk_parameters else {}}
+        주장 = f"전략: {strategy_type.value if strategy_type else None}, 진입조건: {[ec.indicator for ec in entry_conditions]}, 청산조건: {[ec.indicator for ec in exit_conditions]}, 리스크파라미터: {risk_parameters.dict() if risk_parameters else {}}. "
+        # 전략별 추천 및 신뢰도 예시
+        if strategy_type and strategy_type.value.lower() == 'momentum':
+            추천 = 'BUY'
+            신뢰도 = 0.8
+            주장 += '모멘텀 전략상 매수 우위.'
+        elif strategy_type and strategy_type.value.lower() == 'mean_reversion':
+            추천 = 'SELL'
+            신뢰도 = 0.7
+            주장 += '역추세 전략상 매도 우위.'
+        else:
+            추천 = 'HOLD'
+            신뢰도 = 0.5
+            주장 += '전략상 중립.'
+        prompt = f"""너는 투자 전략 전문가야. 아래 전략 정보를 바탕으로 투자자에게 논리적으로 설명해줘.\n전략: {strategy_type.value if strategy_type else None}, 진입조건: {[ec.indicator for ec in entry_conditions]}, 청산조건: {[ec.indicator for ec in exit_conditions]}, 리스크파라미터: {risk_parameters.dict() if risk_parameters else {}}\n이 전략이 의미하는 바와 투자 판단에 미치는 영향, 추천 의견을 전문가답게 3~4문장으로 써줘."""
+        전문가설명 = call_openai_api(prompt)
+        return {
+            "agent": "strategy_generator",
+            "분야": "전략",
+            "핵심지표": 핵심지표,
+            "주장": 주장,
+            "추천": 추천,
+            "신뢰도": 신뢰도,
+            "전문가설명": 전문가설명
+        } 

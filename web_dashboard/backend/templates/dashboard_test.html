@@ -53,53 +53,94 @@
                 </div>
             </div>
             <div class="card p-4">
+            {% if selected_stock %}
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <div>
-                        <span class="stock-code">{{ selected_stock.code }}</span>
-                        <span class="momentum">Momentum</span>
+                        <span class="stock-code">{{ selected_stock.name }} ({{ selected_stock.code }})</span>
+                        {% if selected_stock.holding_qty|int > 0 %}
+                        <span class="badge bg-success ms-2">보유중</span>
+                        {% endif %}
                     </div>
                     <a href="#" style="color:#6c63ff;">View All</a>
+                </div>
+                <div class="mb-3">
+                    <div class="section-title">보유 현황</div>
+                    <table class="table table-sm table-bordered bg-white">
+                        <thead><tr><th>종목명</th><th>종목코드</th><th>보유수량</th><th>현재가</th></tr></thead>
+                        <tbody>
+                        {% for stock in stocks if stock.holding_qty|int > 0 %}
+                        <tr>
+                            <td>{{ stock.name }}</td>
+                            <td>{{ stock.code }}</td>
+                            <td>{{ stock.holding_qty }}</td>
+                            <td>{{ stock.tech.close or '-' }}</td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
                 </div>
                 <div class="row mb-3">
                     <div class="col-md-3">
                         <div class="section-title">전략 분석</div>
-                        <div>{% autoescape false %}{{ strategy_analysis }}{% endautoescape %}</div>
+                        <div>
+                            <strong>전략:</strong> {{ selected_stock.strategy.strategy or '-' }}<br>
+                            <strong>설명:</strong> {{ selected_stock.strategy.desc or '-' }}
+                        </div>
                     </div>
                     <div class="col-md-3">
                         <div class="section-title">뉴스/이슈 분석</div>
-                        <div>{% autoescape false %}{{ issues_analysis }}{% endautoescape %}</div>
+                        <div>
+                            <strong>요약:</strong> {{ selected_stock.news.news_summary or '-' }}<br>
+                            <strong>감성점수:</strong> {{ selected_stock.news.sentiment or '-' }}<br>
+                            <strong>시장영향도:</strong> {{ selected_stock.news.impact or '-' }}<br>
+                            <strong>키워드:</strong> {{ selected_stock.news.keywords or '-' }}
+                        </div>
                     </div>
                     <div class="col-md-3">
                         <div class="section-title">리스크 분석</div>
                         <div>
-                            {% autoescape false %}{{ risk_analysis }}{% endautoescape %}
-                            <span class="risk-medium">Medium</span>
+                            <strong>점수:</strong> {{ selected_stock.risk.score or '-' }}<br>
+                            <strong>변동성:</strong> {{ selected_stock.risk.volatility or '-' }}<br>
+                            <strong>레벨:</strong> {{ selected_stock.risk.level or '-' }}
                         </div>
                     </div>
                     <div class="col-md-3">
                         <div class="section-title">기술적 분석</div>
-                        <div>{% autoescape false %}{{ technical_analysis }}{% endautoescape %}</div>
+                        <div>
+                            <strong>RSI:</strong> {{ selected_stock.tech.rsi or '-' }}<br>
+                            <strong>MACD:</strong> {{ selected_stock.tech.macd or '-' }}<br>
+                            <strong>볼린저밴드 상단:</strong> {{ selected_stock.tech.bb_upper or '-' }}<br>
+                            <strong>하단:</strong> {{ selected_stock.tech.bb_lower or '-' }}<br>
+                            <strong>최근가격:</strong> {{ selected_stock.tech.close or '-' }}
+                        </div>
                     </div>
                 </div>
                 <div class="row mb-3">
                     <div class="col-md-8">
-                        <div class="section-title">시계열 분석</div>
-                        <div style="background:#f3f3f3; border-radius:12px; height:180px; display:flex; align-items:center; justify-content:center;">
-                            <span style="color:#bbb;">(시계열 그래프 자리)</span>
-                        </div>
+                        <div class="section-title">시계열 예측 (1~5일 후)</div>
+                        <table class="table table-sm table-bordered bg-white">
+                            <thead><tr><th>예측일</th><th>예상가격</th></tr></thead>
+                            <tbody>
+                            {% for f in selected_stock.forecast %}
+                            <tr><td>{{ f.date }}</td><td>{{ f.price }}</td></tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
                     </div>
                     <div class="col-md-4">
                         <div class="section-title">종합 의견</div>
                         <div class="opinion-box">
                             <ul class="mb-0">
-                                <li>Momentum, Growth, Value 전략을 고려하여 다양한 종목을 포트폴리오에 포함</li>
-                                <li>뉴스/이슈 분석을 통해 시장 영향도가 높은 종목을 선정</li>
-                                <li>리스크 분석을 통해 적정한 리스크 수준을 유지하면서 다양한 종목으로 구성</li>
-                                <li>기술적 분석을 통해 추세 및 매매 시점을 신중히 결정</li>
+                                <li>전략, 뉴스, 리스크, 기술적 분석을 종합하여 투자 판단</li>
+                                <li>시계열 예측을 참고하여 매수/매도 시점 고려</li>
+                                <li>포트폴리오 분산 및 리스크 관리</li>
                             </ul>
                         </div>
                     </div>
                 </div>
+            {% else %}
+                <div class="alert alert-warning">표시할 종목 데이터가 없습니다.</div>
+            {% endif %}
             </div>
         </div>
     </div>

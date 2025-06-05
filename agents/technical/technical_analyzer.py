@@ -22,6 +22,7 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense, Dropout
 import warnings
 import time
+from agents.utils.call_openai_api import call_openai_api
 warnings.filterwarnings('ignore')
 
 class TechnicalAnalyzer:
@@ -1233,22 +1234,86 @@ class TechnicalAnalyzer:
         }
 
     def debate(self, context, others_opinions, my_opinion_1st_round=None):
-        """
-        타 에이전트 의견을 참고해 자신의 의견을 보완/수정합니다.
-        1라운드 의견(my_opinion_1st_round)이 있으면 재분석 없이 그것을 사용합니다.
-        """
-        if my_opinion_1st_round is not None:
-            my_opinion = dict(my_opinion_1st_round)
+        analysis = self.analyze(context['symbol'], context.get('period', '1y'))
+        indicators = analysis.get('indicators', {})
+        rsi = indicators.get('rsi')
+        macd = indicators.get('macd')
+        macd_signal = indicators.get('macd_signal')
+        rsi_val = rsi.iloc[-1] if rsi is not None and hasattr(rsi, 'iloc') else None
+        macd_val = macd.iloc[-1] if macd is not None and hasattr(macd, 'iloc') else None
+        macd_signal_val = macd_signal.iloc[-1] if macd_signal is not None and hasattr(macd_signal, 'iloc') else None
+        trend = analysis.get('trend_analysis', {})
+        short_trend = trend.get('short_term_trend')
+        mid_trend = trend.get('mid_term_trend')
+        long_trend = trend.get('long_term_trend')
+        trend_strength = trend.get('trend_strength', 0)
+        핵심지표 = {"RSI": rsi_val, "MACD": macd_val, "MACD시그널": macd_signal_val, "단기추세": short_trend, "중기추세": mid_trend, "장기추세": long_trend, "추세강도": trend_strength}
+        주장 = f"RSI {rsi_val}, MACD {macd_val}, 단기추세 {short_trend}, 중기추세 {mid_trend}, 장기추세 {long_trend}, 추세강도 {trend_strength}. "
+        buy_score = 0
+        sell_score = 0
+        hold_score = 0
+        if rsi_val is not None:
+            if rsi_val < 30:
+                buy_score += 2
+                주장 += f'RSI 과매도({rsi_val:.2f}). '
+            elif rsi_val > 70:
+                sell_score += 2
+                주장 += f'RSI 과매수({rsi_val:.2f}). '
+            else:
+                hold_score += 1
+                주장 += f'RSI 중립({rsi_val:.2f}). '
+        if macd_val is not None and macd_signal_val is not None:
+            if macd_val > macd_signal_val and macd_val > 0:
+                buy_score += 1
+                주장 += f'MACD 골든크로스({macd_val:.2f} > {macd_signal_val:.2f}). '
+            elif macd_val < macd_signal_val and macd_val < 0:
+                sell_score += 1
+                주장 += f'MACD 데드크로스({macd_val:.2f} < {macd_signal_val:.2f}). '
+            else:
+                hold_score += 1
+                주장 += 'MACD 중립. '
+        if short_trend == 'UP':
+            buy_score += 1
+            주장 += '단기 추세 상승. '
+        elif short_trend == 'DOWN':
+            sell_score += 1
+            주장 += '단기 추세 하락. '
+        if mid_trend == 'UP':
+            buy_score += 1
+            주장 += '중기 추세 상승. '
+        elif mid_trend == 'DOWN':
+            sell_score += 1
+            주장 += '중기 추세 하락. '
+        if long_trend == 'UP':
+            buy_score += 1
+            주장 += '장기 추세 상승. '
+        elif long_trend == 'DOWN':
+            sell_score += 1
+            주장 += '장기 추세 하락. '
+        if trend_strength > 25:
+            주장 += f'추세 강도 강함({trend_strength:.2f}). '
         else:
-            my_opinion = self.propose(context)
-        # 예시: 타 에이전트가 모두 SELL이면 본인도 SELL, 모두 BUY면 BUY, 모두 HOLD면 HOLD로 보정
-        if all(op['decision'] == 'SELL' for op in others_opinions):
-            my_opinion['decision'] = 'SELL'
-            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
-        elif all(op['decision'] == 'BUY' for op in others_opinions):
-            my_opinion['decision'] = 'BUY'
-            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
-        elif all(op['decision'] == 'HOLD' for op in others_opinions):
-            my_opinion['decision'] = 'HOLD'
-            my_opinion['reason'] += ' (타 에이전트 의견 반영)'
-        return my_opinion 
+            주장 += f'추세 강도 약함({trend_strength:.2f}). '
+        if buy_score > sell_score and buy_score > hold_score:
+            추천 = 'BUY'
+            신뢰도 = min(1.0, 0.5 + 0.1 * buy_score)
+            주장 += '기술적 신호상 매수 우위.'
+        elif sell_score > buy_score and sell_score > hold_score:
+            추천 = 'SELL'
+            신뢰도 = min(1.0, 0.5 + 0.1 * sell_score)
+            주장 += '기술적 신호상 매도 우위.'
+        else:
+            추천 = 'HOLD'
+            신뢰도 = 0.5
+            주장 += '기술적 신호상 중립.'
+        prompt = f"""너는 기술적 분석 전문가야. 아래 수치를 바탕으로 투자자에게 논리적으로 설명해줘.\nRSI: {rsi_val}, MACD: {macd_val}, 단기추세: {short_trend}, 중기추세: {mid_trend}, 장기추세: {long_trend}, 추세강도: {trend_strength}\n이 수치가 의미하는 바와 투자 판단에 미치는 영향, 추천 의견을 전문가답게 3~4문장으로 써줘."""
+        전문가설명 = call_openai_api(prompt)
+        return {
+            "agent": "technical_analyzer",
+            "분야": "기술적분석",
+            "핵심지표": 핵심지표,
+            "주장": 주장,
+            "추천": 추천,
+            "신뢰도": 신뢰도,
+            "전문가설명": 전문가설명
+        } 

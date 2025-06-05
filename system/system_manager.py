@@ -17,6 +17,8 @@ from agents.strategy.models import MarketCondition
 import FinanceDataReader as fdr
 import openai
 import os
+import json
+import csv
 
 class SystemManager:
     def __init__(self):
@@ -134,18 +136,22 @@ class SystemManager:
 
     async def _start_periodic_analysis(self):
         """
-        주기적인 분석을 시작합니다. (상위 10개 종목 전체 반복 분석)
+        주기적인 분석을 시작합니다. (보유 종목 + 상위 10개 종목 분석)
         """
         while self.is_running:
             try:
-                # 1. 상위 10개 종목 선정 (거래량 기준)
+                # 1. 보유 종목 불러오기
+                holdings = self._load_holdings()
+                holding_codes = list(holdings.keys())
+                # 2. 상위 10개 종목 선정 (거래량 기준)
                 if self.stock_df is not None:
                     top10_df = self.stock_df.sort_values(by='Volume', ascending=False).head(10)
-                    target_symbols = list(top10_df['Code'])
+                    top10_codes = list(top10_df['Code'])
                 else:
                     self.logger.error("종목 데이터가 없습니다. 기본 종목 리스트로 대체합니다.")
-                    target_symbols = [self.current_symbol]
-
+                    top10_codes = [self.current_symbol]
+                # 3. 보유 종목 + 상위 10개 종목 합치기(중복 제거, 최대 15개)
+                all_codes = list(dict.fromkeys(holding_codes + top10_codes))[:15]
                 # 분석 성공 종목만 append할 리스트
                 news_analyses = []
                 strategy_results = []
@@ -153,8 +159,7 @@ class SystemManager:
                 risk_analyses = []
                 debate_results_all = []
                 target_symbols_filtered = []
-
-                for symbol in target_symbols:
+                for symbol in all_codes:
                     self.logger.info(f"[{symbol}] 뉴스 분석 시작")
                     news = self.news_analyzer.analyze_sentiment_for_stock(symbol)
                     if not news or (isinstance(news, dict) and news.get('감성점수') is None):
@@ -186,13 +191,9 @@ class SystemManager:
                     )
                     self.logger.info(f"[{symbol}] 전략 분석 완료")
                     self.logger.info(f"[{symbol}] 기술적 분석 시작")
-                    # 기술적 분석 시 데이터 수집 403 에러 재시도 횟수를 5회로 늘리기 위해 인자 전달(가능하다면)
                     try:
-                        # analyze 함수가 retry_count 인자를 지원한다면 아래처럼 호출
                         tech = self.technical_analyzer.analyze(symbol, retry_count=5)
                     except TypeError:
-                        # analyze 함수가 retry_count 인자를 지원하지 않으면 기존 방식대로 호출
-                        # (내부에서 재시도 횟수 수정 필요)
                         tech = self.technical_analyzer.analyze(symbol)
                     if not tech or not isinstance(tech, dict) or tech.get('raw_data') is None or tech.get('raw_data').empty:
                         self.logger.warning(f"[{symbol}] 기술적 분석 실패 또는 데이터 없음. 이후 분석 건너뜀.")
@@ -215,32 +216,27 @@ class SystemManager:
                         self.logger.warning(f"[{symbol}] 리스크 분석 실패. 이후 분석 건너뜀.")
                         continue
                     self.logger.info(f"[{symbol}] 리스크 분석 완료")
-                    # 모든 분석이 성공한 경우에만 append
                     news_analyses.append(news)
                     strategy_results.append(strategy)
                     technical_analyses.append(tech)
                     risk_analyses.append(risk)
                     target_symbols_filtered.append(symbol)
-
-                # 2. 종목별 debate 결과 기반 top5 선정 (재분석 없이 이미 분석된 결과만 사용)
+                # 기술적 분석 시계열 예측 CSV 저장
+                self.save_forecast_csv(technical_analyses)
+                # 이하 기존 top5 선정 및 debate/보고서/holdings 저장 로직 유지
                 symbol_scores = []
                 for i in range(len(news_analyses)):
-                    # 디베이트는 아직 실행하지 않음
                     buy_count = 0
                     confidence_sum = 0.0
                     symbol_scores.append((i, buy_count, confidence_sum))
-                # top5 선정은 기존대로(임시로 buy_count, confidence_sum 0)
                 symbol_scores = [(i, 0, 0.0) for i in range(len(news_analyses))]
                 top5 = symbol_scores[:5]
                 top5_indices = [x[0] for x in top5]
-                # top5만 추출
                 top5_symbols = [target_symbols_filtered[i] for i in top5_indices]
                 top5_news = [news_analyses[i] for i in top5_indices]
                 top5_strategies = [strategy_results[i] for i in top5_indices]
                 top5_risks = [risk_analyses[i] for i in top5_indices]
                 top5_techs = [technical_analyses[i] for i in top5_indices]
-
-                # top5 종목별로 context를 만들어 한 번에 디베이트
                 now_ts = datetime.now().isoformat()
                 top5_debates = []
                 for idx, symbol in enumerate(top5_symbols):
@@ -270,8 +266,6 @@ class SystemManager:
                     }
                     debate_opinions = self.agent_debate_round(debate_context)
                     top5_debates.append(debate_opinions)
-
-                # 3. 보고서 생성 (top5만)
                 await self._generate_investment_report(
                     top5_symbols,
                     top5_news,
@@ -280,7 +274,30 @@ class SystemManager:
                     top5_techs,
                     top5_debates
                 )
-                # top5 선정 및 보고서 생성 후 루프 종료
+                self.save_debate_log(top5_symbols, top5_debates)
+                # holdings 갱신: top5 포트폴리오에서 현금 제외, 종목코드-수량 dict로 저장
+                # (구매개수 계산은 _generate_investment_report와 동일하게 적용)
+                # 기술적 분석에서 symbol, current_price 활용
+                allocations, cash_ratio = self._calculate_portfolio_allocation(top5_symbols, top5_debates or [[] for _ in top5_symbols])
+                total_invest = 1_000_000
+                code_to_price = {}
+                for tech in top5_techs:
+                    code = tech.get('symbol')
+                    price = tech.get('current_price', 0)
+                    if code and price:
+                        code_to_price[code] = price
+                holdings_new = {}
+                for code in top5_symbols:
+                    ratio = allocations.get(code, 0)
+                    price = code_to_price.get(code, 0)
+                    invest_amt = int(total_invest * ratio)
+                    if price > 0:
+                        qty = invest_amt // int(price)
+                    else:
+                        qty = 0
+                    if qty > 0:
+                        holdings_new[code] = qty
+                self._save_holdings(holdings_new)
                 self.is_running = False
                 return
 
@@ -356,37 +373,43 @@ class SystemManager:
             self.logger.info(f"[DEBUG] {symbol} 리스크 분석 결과: {risk}")
 
         # debate 결과 기반 포트폴리오 비중 산출 함수
-        def _calculate_portfolio_allocation(symbols, debate_results):
-            # debate_results: List[List[Dict]] (각 종목별 에이전트 의견 리스트)
-            allocations = {}
-            total_score = 0.0
-            for symbol, debates in zip(symbols, debate_results or [[]]*len(symbols)):
-                # 각 debate: {'decision': 'BUY'/'HOLD'/'SELL', 'confidence': float, ...}
-                buy_score = sum(1.0 * (d.get('decision') == 'BUY') * d.get('confidence', 0.5) for d in debates)
-                hold_score = sum(0.5 * (d.get('decision') == 'HOLD') * d.get('confidence', 0.5) for d in debates)
-                sell_score = sum(-1.0 * (d.get('decision') == 'SELL') * d.get('confidence', 0.5) for d in debates)
-                score = max(buy_score + hold_score + sell_score, 0.0)
-                allocations[symbol] = score
-                total_score += score
-            # 전체 신뢰도 낮으면 현금 비중↑
-            avg_score = total_score / (len(symbols) or 1)
-            cash_ratio = max(0.1, 1.0 - total_score) if total_score < 1.0 else 0.05
-            # 비율 정규화
-            if total_score > 0:
-                for symbol in allocations:
-                    allocations[symbol] = round((allocations[symbol] / total_score) * (1-cash_ratio), 3)
-            else:
-                for symbol in allocations:
-                    allocations[symbol] = round(0.9 / len(symbols), 3)
-            return allocations, round(cash_ratio, 3)
+        allocations, cash_ratio = self._calculate_portfolio_allocation(symbols, debate_results or [[] for _ in symbols])
 
-        # debate_results 인자가 없으면 빈 리스트로 처리
-        allocations, cash_ratio = _calculate_portfolio_allocation(symbols, debate_results or [[] for _ in symbols])
-        portfolio_rows = [
-            {'자산': symbol, '비율': f"{int(allocations[symbol]*100)}%"} for symbol in symbols
-        ]
-        portfolio_rows.append({'자산': '현금', '비율': f"{int(cash_ratio*100)}%"})
-        portfolio_table = make_table(portfolio_rows, ['자산', '비율'])
+        # 전체 투자금(원)
+        total_invest = 1_000_000
+        # 종목별 현재가 추출 (기술적 분석 결과에서)
+        code_to_price = {}
+        for tech in technical_analyses:
+            code = tech.get('symbol')
+            price = tech.get('current_price', 0)
+            if code and price:
+                code_to_price[code] = price
+        # 종목코드→종목명 매핑 생성
+        code_to_name = {code: self._get_stock_name(code) for code in symbols}
+        # 구매 개수 및 투자금 계산
+        portfolio_rows = []
+        remain_cash = total_invest
+        for code in symbols:
+            name = code_to_name.get(code, code)
+            ratio = allocations.get(code, 0)
+            price = code_to_price.get(code, 0)
+            invest_amt = int(total_invest * ratio)
+            if price > 0:
+                qty = invest_amt // int(price)
+                used = qty * int(price)
+            else:
+                qty = 0
+                used = 0
+            remain_cash -= used
+            portfolio_rows.append({
+                '종목명': name,
+                '구매개수': qty,
+                '투자금': f"{used:,}",
+                '현재가': f"{price:,}"
+            })
+        # 현금
+        portfolio_rows.append({'종목명': '현금', '구매개수': '-', '투자금': f"{remain_cash:,}", '현재가': '-'})
+        portfolio_table = make_table(portfolio_rows, ['종목명', '구매개수', '투자금', '현재가'])
 
         # 프롬프트 템플릿(6번 항목에 LLM이 직접 논리적 이유와 기대효과를 작성하도록 지시)
         prompt = f"""
@@ -632,7 +655,7 @@ class SystemManager:
 
     def agent_debate_round(self, context):
         """
-        에이전트 토론 라운드: 각 에이전트가 의견을 제시하고, 타 에이전트 의견을 반영해 재평가합니다.
+        에이전트 토론 라운드: 각 에이전트의 debate 결과만 수집해 반환합니다.
         """
         agents = [
             self.technical_analyzer,
@@ -640,32 +663,14 @@ class SystemManager:
             self.strategy_generator,
             self.risk_analyzer
         ]
-        self.logger.info("[디베이트] 1라운드: 각 에이전트의 최초 의견 수집 시작")
-        opinions = []
-        for agent in agents:
-            if hasattr(agent, 'propose'):
-                op = agent.propose(context)
-                self.logger.info(f"[디베이트][1R] {op.get('agent', agent.__class__.__name__)}: {op.get('decision')} (신뢰도: {op.get('confidence')}, 이유: {op.get('reason')})")
-                opinions.append(op)
-            else:
-                op = {'agent': agent.__class__.__name__, 'decision': 'HOLD', 'confidence': 0.5, 'reason': '기본값'}
-                self.logger.info(f"[디베이트][1R] {op['agent']}: {op['decision']} (신뢰도: {op['confidence']}, 이유: {op['reason']})")
-                opinions.append(op)
-
-        self.logger.info("[디베이트] 2라운드: 타 에이전트 의견 반영 후 재평가 시작")
         final_opinions = []
-        for idx, agent in enumerate(agents):
-            others = [op for i, op in enumerate(opinions) if i != idx]
+        for agent in agents:
             if hasattr(agent, 'debate'):
-                # 1라운드 의견을 그대로 넘김
-                op = agent.debate(context, others, my_opinion_1st_round=opinions[idx])
-                self.logger.info(f"[디베이트][2R] {op.get('agent', agent.__class__.__name__)}: {op.get('decision')} (신뢰도: {op.get('confidence')}, 이유: {op.get('reason')})")
+                op = agent.debate(context, [])
                 final_opinions.append(op)
             else:
-                op = opinions[idx]
-                self.logger.info(f"[디베이트][2R] {op.get('agent', agent.__class__.__name__)}: {op.get('decision')} (신뢰도: {op.get('confidence')}, 이유: {op.get('reason')})")
+                op = {'agent': agent.__class__.__name__, '추천': 'HOLD', '신뢰도': 0.5, '주장': '기본값', '핵심지표': '-', '전문가설명': '-'}
                 final_opinions.append(op)
-
         self.logger.info(f"[디베이트] 최종 토론 결과: {final_opinions}")
         return final_opinions
 
@@ -868,6 +873,104 @@ class SystemManager:
         except Exception as e:
             self.logger.error(f"결정 실행 중 오류 발생: {str(e)}")
             raise
+
+    # debate 결과를 텍스트 파일로 구조화해 저장
+    def save_debate_log(self, symbols, debate_results):
+        """debate 결과를 debate_logs/debate_log_YYYYMMDD.json에 저장"""
+        from datetime import datetime
+        out_dir = 'debate_logs'
+        os.makedirs(out_dir, exist_ok=True)
+        date_str = datetime.now().strftime('%Y%m%d')
+        out_path = os.path.join(out_dir, f'debate_log_{date_str}.json')
+        data = {s: d for s, d in zip(symbols, debate_results)}
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        self.logger.info(f"debate 로그가 {out_path}에 저장되었습니다.")
+
+    def print_debate_results(self, debate_results):
+        """
+        debate 결과(List[Dict])를 사람이 읽기 쉬운 텍스트 표로 구조화하여 출력합니다.
+        """
+        if not debate_results or not isinstance(debate_results, list):
+            print("[디베이트 결과 없음]")
+            return
+        print("\n[에이전트 디베이트 결과 요약]")
+        print("="*60)
+        for res in debate_results:
+            분야 = res.get("분야", res.get("agent", "-"))
+            print(f"[분야] {분야}")
+            print(f"  - 핵심지표: {res.get('핵심지표', '-')}")
+            print(f"  - 주장: {res.get('주장', '-')}")
+            print(f"  - 추천: {res.get('추천', '-')}  |  신뢰도: {res.get('신뢰도', '-')}\n")
+            print(f"  - 전문가설명: {res.get('전문가설명', '-')}\n")
+            print("-"*60)
+
+    def _load_holdings(self, path='holdings.json'):
+        """보유 종목/수량을 holdings.json에서 불러옴"""
+        try:
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            else:
+                return {}
+        except Exception as e:
+            self.logger.error(f"보유 종목 불러오기 오류: {str(e)}")
+            return {}
+
+    def _save_holdings(self, holdings, path='holdings.json'):
+        """보유 종목/수량을 holdings.json에 저장"""
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(holdings, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.logger.error(f"보유 종목 저장 오류: {str(e)}")
+
+    def save_forecast_csv(self, technical_analyses, date_str=None):
+        """기술적 분석 시계열 예측 결과를 forecasts/forecast_YYYYMMDD.csv로 저장"""
+        if date_str is None:
+            from datetime import datetime
+            date_str = datetime.now().strftime('%Y%m%d')
+        rows = []
+        for tech in technical_analyses:
+            code = tech.get('symbol')
+            name = self._get_stock_name(code)
+            forecast = tech.get('price_forecast', {})
+            dates = forecast.get('forecast_dates', [])
+            prices = forecast.get('forecast_prices', [])
+            for d, p in zip(dates, prices):
+                rows.append({'종목코드': code, '종목명': name, '예측일': d, '예측가격': p})
+        if rows:
+            out_dir = 'forecasts'
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, f'forecast_{date_str}.csv')
+            with open(out_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=['종목코드', '종목명', '예측일', '예측가격'])
+                writer.writeheader()
+                writer.writerows(rows)
+            self.logger.info(f"시계열 예측 결과가 {out_path}에 저장되었습니다.")
+
+    def _calculate_portfolio_allocation(self, symbols, debate_results):
+        """
+        debate_results: List[List[Dict]] (각 종목별 에이전트 의견 리스트)
+        """
+        allocations = {}
+        total_score = 0.0
+        for symbol, debates in zip(symbols, debate_results or [[]]*len(symbols)):
+            buy_score = sum(1.0 * (d.get('decision') == 'BUY') * d.get('confidence', 0.5) for d in debates)
+            hold_score = sum(0.5 * (d.get('decision') == 'HOLD') * d.get('confidence', 0.5) for d in debates)
+            sell_score = sum(-1.0 * (d.get('decision') == 'SELL') * d.get('confidence', 0.5) for d in debates)
+            score = max(buy_score + hold_score + sell_score, 0.0)
+            allocations[symbol] = score
+            total_score += score
+        avg_score = total_score / (len(symbols) or 1)
+        cash_ratio = max(0.1, 1.0 - total_score) if total_score < 1.0 else 0.05
+        if total_score > 0:
+            for symbol in allocations:
+                allocations[symbol] = round((allocations[symbol] / total_score) * (1-cash_ratio), 3)
+        else:
+            for symbol in allocations:
+                allocations[symbol] = round(0.9 / len(symbols), 3)
+        return allocations, round(cash_ratio, 3)
 
 if __name__ == "__main__":
     import asyncio
