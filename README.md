@@ -1,213 +1,100 @@
-# MCP-based Trading System
+# Debate 기반 멀티에이전트 자동매매 시스템
 
 ## 프로젝트 개요
-MCP(Machine Conversation Protocol) 기반의 자동화된 트레이딩 시스템입니다. LLM을 활용하여 다양한 에이전트들과 통신하며 트레이딩 전략을 수립하고 실행합니다.
+OpenAI 기반 LLM과 뉴스/전략/리스크/기술적 분석 등 다양한 에이전트가 debate(토론)하여, 종목별 핵심지표·추천·신뢰도·전문가 설명을 종합해 자동으로 포트폴리오를 결정하고, 실시간 대시보드로 시각화하는 자동매매 파이프라인입니다.
 
 ## 시스템 구조
 ```
-trading_system/
-├── agents/                     # 각 에이전트 서버
-│   ├── strategy/              # 전략 수립 에이전트
-│   ├── risk/                  # 리스크 관리 에이전트
-│   ├── news/                  # 뉴스 분석 에이전트
-│   ├── technical/            # 기술적 분석 에이전트
-│   ├── xai/                  # Explainable AI 에이전트
-│   └── trading/             # 거래 실행 에이전트
-├── web_dashboard/            # 웹 인터페이스
-│   ├── frontend/            # React 기반 프론트엔드
-│   └── backend/             # FastAPI 기반 백엔드
-├── config/                  # 설정 파일
-├── utils/                   # 공통 유틸리티
-├── tests/                   # 테스트 코드
-└── docs/                    # 문서
+capstone_EBS_project/
+├── agents/                # 각종 분석 에이전트 (뉴스, 전략, 리스크, 기술적 등)
+├── system_manager.py      # debate 결과 종합 및 포트폴리오 결정
+├── web_dashboard/        # 대시보드 (backend: Flask/FastAPI, frontend: React)
+├── artifacts/            # debate_logs, forecasts 등 자동 생성 폴더
+├── holdings.json         # 전일 보유 종목/수량 자동 관리
+├── requirements.txt      # 의존성 관리
+└── investment_report_*.md # 일별 투자 리포트 (자동 생성)
 ```
 
 ## 주요 기능
-1. 자연어 기반 트레이딩 전략 수립
-2. 실시간 리스크 관리
-3. 뉴스 및 시장 분석
-4. 기술적 분석
-5. 자동화된 거래 실행
-6. XAI 기반 의사결정 설명
-7. 실시간 모니터링 대시보드
+- debate 기반 멀티에이전트(뉴스/전략/리스크/기술적) 종목 분석
+- OpenAI API 기반 전문가 설명 및 한글 답변 유도
+- holdings.json, forecast_YYYYMMDD.csv, investment_report_*.md 등 아티팩트 자동 관리
+- robust 종목명-코드 매칭 및 파싱, NameError 등 버그 자동 방지
+- 실시간 대시보드에서 종목별 분석/예측/보유수량/카드 시각화
+- 자동매매/트레이딩 실전 구조 (보유종목+상위종목 동시분석, 자동 리밸런싱)
 
 ## 설치 및 실행
-1. 환경 설정
+1. **의존성 설치**
 ```bash
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install --upgrade pip wheel
 pip install -r requirements.txt
 ```
+- FinanceDataReader 설치 오류 시:
+  - pip 최신화, wheel 설치, 또는
+  - `pip install git+https://github.com/FinanceData/FinanceDataReader.git`
 
-2. 환경 변수 설정
+2. **환경 변수 설정**
 ```bash
 cp .env.example .env
-# .env 파일에 필요한 설정 추가
+# .env 파일에 OPENAI_API_KEY 등 필수 항목 입력
 ```
 
-3. 에이전트 서버 실행
+3. **시스템 실행**
 ```bash
+# 메인 시스템 (debate 및 자동매매)
+python system_manager.py
+
+# (에이전트별 별도 실행 필요 시)
 python -m agents.strategy.main
 python -m agents.risk.main
 # ... 기타 에이전트 실행
 ```
 
-4. 웹 대시보드 실행
+4. **대시보드 실행**
 ```bash
 cd web_dashboard/backend
-uvicorn main:app --reload
+python app_test.py  # 또는 uvicorn main:app --reload
 cd ../frontend
-npm start
+npm install && npm start
 ```
 
-## API 문서
-- 각 에이전트의 API 문서는 `http://localhost:PORT/docs`에서 확인 가능
-- Swagger UI를 통한 API 테스트 지원
+## 아티팩트/데이터 관리
+- **debate_logs/** : debate 결과 자동 저장
+- **forecasts/** : forecast_YYYYMMDD.csv (시계열 예측)
+- **holdings.json** : 전일 보유 종목/수량 자동 관리
+- **investment_report_*.md** : 일별 투자 리포트 (분석/포트폴리오 표 포함)
+- 폴더/파일은 자동 생성 및 관리됨
 
-## 개발 가이드
+## robust 종목명-코드 매칭
+- 종목명/코드 혼재 표기, 마크다운 파싱, 대시보드 매칭 등에서 robust하게 동작
+- NameError, 데이터 미표시 등 버그 자동 방지
+
+## 대시보드 주요 화면
+- 종목별 보유수량, 전략/뉴스/리스크/기술적 분석, 시계열 예측을 카드/테이블로 시각화
+- 종목명만/종목명+코드 혼재 표기 모두 지원
+- "표시할 종목 데이터가 없습니다." 등 안내 메시지 안전 처리
+
+## 예시: debate 기반 자동 포트폴리오 결정
+```python
+from system_manager import SystemManager
+sm = SystemManager()
+sm.run_debate_and_decide_portfolio()
+# holdings.json, investment_report_*.md, forecasts/ 등 자동 생성
+```
+
+## 참고/주의사항
+- requirements.txt, pandas, FinanceDataReader 등 의존성 최신화 필요
+- OPENAI_API_KEY 등 환경변수 필수
+- artifacts/ 폴더는 자동 생성되며, 별도 관리 필요 없음
+- 대시보드 연동 시 최신 report/forecast/holdings 파일 자동 반영
+
+## 개발/테스트 가이드
 - [에이전트 개발 가이드](docs/agent_development.md)
 - [API 통신 프로토콜](docs/mcp_protocol.md)
 - [테스트 가이드](docs/testing.md)
 
+---
 
-
-## Agents
-
-### 1. News Analysis Agent
-- Collects and analyzes news articles from various sources
-- Performs sentiment analysis and impact assessment
-- Generates trading signals based on news events
-- Endpoint: `http://localhost:8003/news`
-
-### 2. Technical Analysis Agent
-- Analyzes market data using various technical indicators
-- Provides comprehensive technical analysis including:
-  - Moving Averages (SMA, EMA)
-  - Oscillators (RSI, MACD, Stochastic)
-  - Volume Indicators (OBV, MFI)
-  - Support/Resistance Levels
-  - Chart Pattern Detection
-- Generates trading signals with entry/exit points
-- Endpoint: `http://localhost:8004/analyze`
-
-### 3. XAI (Explainable AI) Agent
-- Provides detailed explanations for trading decisions
-- Features include:
-  - Feature importance analysis
-  - Decision path visualization
-  - Local and global explanations
-  - Counterfactual analysis
-  - Risk factor identification
-- Supports multiple signal sources:
-  - Technical analysis signals
-  - News-based signals
-  - Fundamental analysis signals
-  - Market sentiment signals
-- Endpoint: `http://localhost:8005/explain`
-
-## Setup
-
-1. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-2. Install TA-Lib:
-```bash
-# macOS
-brew install ta-lib
-
-# Ubuntu
-wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
-tar -xzf ta-lib-0.4.0-src.tar.gz
-cd ta-lib/
-./configure --prefix=/usr
-make
-sudo make install
-```
-
-3. Start the services:
-```bash
-# News Analysis Agent
-uvicorn agents.news.api:app --host 0.0.0.0 --port 8003
-
-# Technical Analysis Agent
-uvicorn agents.technical.api:app --host 0.0.0.0 --port 8004
-
-# XAI Agent
-uvicorn agents.xai.api:app --host 0.0.0.0 --port 8005
-```
-
-## Usage Examples
-
-### XAI Analysis
-```python
-import requests
-
-# XAI analysis request
-response = requests.post(
-    "http://localhost:8005/explain",
-    json={
-        "signal_id": "tech_signal_001",
-        "source": "technical",
-        "analysis_type": "comprehensive",
-        "additional_context": {
-            "ticker": "AAPL",
-            "timeframe": "1d"
-        }
-    }
-)
-
-# Parse response
-result = response.json()
-print(result['summary'])  # Print analysis summary
-print(result['recommendations'])  # Print recommendations
-```
-
-## API Documentation
-
-### XAI Agent
-
-#### POST /explain
-Generates explanations for trading signals.
-
-Request Body:
-```json
-{
-    "signal_id": "tech_signal_001",
-    "source": "technical",
-    "analysis_type": "comprehensive",
-    "additional_context": {
-        "ticker": "AAPL",
-        "timeframe": "1d"
-    }
-}
-```
-
-Response:
-```json
-{
-    "request_id": "uuid",
-    "signal_explanation": {
-        "signal_id": "tech_signal_001",
-        "source": "technical",
-        "signal_strength": 0.75,
-        "confidence_score": 0.8,
-        "key_drivers": [...],
-        "risk_factors": [...],
-        "alternative_scenarios": [...],
-        "local_explanation": {...},
-        "supporting_evidence": {...}
-    },
-    "global_explanation": {
-        "feature_importance_ranking": [...],
-        "feature_interactions": [...],
-        "model_behavior_summary": "...",
-        "performance_metrics": {...}
-    },
-    "confidence_metrics": {...},
-    "visualization_data": {...},
-    "recommendations": [...],
-    "summary": "..."
-}
-``` 
+문의/기여/이슈는 GitHub를 통해 남겨주세요. 
