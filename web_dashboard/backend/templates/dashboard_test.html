@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>EBS 투자 보고서</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f6f7fb; }
+        .sidebar { background: #232946; color: #fff; min-height: 100vh; width: 220px; }
+        .sidebar .nav-link, .sidebar .nav-link.active { color: #b8c1ec; }
+        .sidebar .nav-link.active { background: #121629; color: #fff; }
+        .sidebar .nav-link:hover { color: #fff; }
+        .main { margin-left: 220px; padding: 32px; }
+        .card { border-radius: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+        .section-title { font-weight: bold; font-size: 1.2rem; margin-bottom: 12px; }
+        .stock-code { font-size: 2rem; font-weight: bold; }
+        .momentum { font-size: 1.2rem; color: #6c63ff; font-weight: bold; }
+        .opinion-box { background: #f3f3f3; border-radius: 12px; padding: 16px; }
+        .risk-medium { color: #fff; background: #6c63ff; border-radius: 8px; padding: 2px 10px; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <div class="d-flex">
+        <!-- Sidebar -->
+        <div class="sidebar d-flex flex-column p-3">
+            <h3 class="mb-4">EBS</h3>
+            <div class="mb-2" style="font-size:1.1em;">Report</div>
+            <ul class="nav nav-pills flex-column mb-auto">
+                {% for stock in stocks %}
+                <li>
+                    <a href="/{{ stock.code }}" class="nav-link {% if selected_stock and selected_stock.code == stock.code %}active{% endif %}">
+                        {{ stock.code }}
+                    </a>
+                </li>
+                {% endfor %}
+                {% for stock in extra_stocks %}
+                <li>
+                    <a href="/{{ stock.code }}" class="nav-link {% if selected_stock and selected_stock.code == stock.code %}active{% endif %}">
+                        {{ stock.code }}
+                    </a>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        <!-- Main Content -->
+        <div class="main flex-grow-1">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <span style="color:#888;">현재 {{ username }}님의 투자 보고서</span>
+                </div>
+                <div>
+                    <span class="material-icons">notifications_none</span>
+                </div>
+            </div>
+            <div class="card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <span class="stock-code">{{ selected_stock.code }}</span>
+                        <span class="momentum">Momentum</span>
+                    </div>
+                    <a href="#" style="color:#6c63ff;">View All</a>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-3">
+                        <div class="section-title">전략 분석</div>
+                        <div>{% autoescape false %}{{ strategy_analysis }}{% endautoescape %}</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="section-title">뉴스/이슈 분석</div>
+                        <div>{% autoescape false %}{{ issues_analysis }}{% endautoescape %}</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="section-title">리스크 분석</div>
+                        <div>
+                            {% autoescape false %}{{ risk_analysis }}{% endautoescape %}
+                            <span class="risk-medium">Medium</span>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="section-title">기술적 분석</div>
+                        <div>{% autoescape false %}{{ technical_analysis }}{% endautoescape %}</div>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-8">
+                        <div class="section-title">시계열 분석</div>
+                        <div style="background:#f3f3f3; border-radius:12px; height:180px; display:flex; align-items:center; justify-content:center;">
+                            <span style="color:#bbb;">(시계열 그래프 자리)</span>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="section-title">종합 의견</div>
+                        <div class="opinion-box">
+                            <ul class="mb-0">
+                                <li>Momentum, Growth, Value 전략을 고려하여 다양한 종목을 포트폴리오에 포함</li>
+                                <li>뉴스/이슈 분석을 통해 시장 영향도가 높은 종목을 선정</li>
+                                <li>리스크 분석을 통해 적정한 리스크 수준을 유지하면서 다양한 종목으로 구성</li>
+                                <li>기술적 분석을 통해 추세 및 매매 시점을 신중히 결정</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 아이콘용 CDN (옵션) -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+</body>
+</html>
