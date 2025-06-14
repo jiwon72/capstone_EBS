@@ -221,15 +221,33 @@ class SystemManager:
                     technical_analyses.append(tech)
                     risk_analyses.append(risk)
                     target_symbols_filtered.append(symbol)
+                    # [추가] debate 수행 및 결과 저장
+                    debate_context = {
+                        'symbol': symbol,
+                        'market_conditions': market_condition_obj,
+                        'period': '1y',
+                        'timestamp': datetime.now().isoformat(),
+                        'technical_indicators': tech.get('indicators', {}),
+                        'market_data': tech.get('raw_data', None)
+                    }
+                    debate_opinions = self.agent_debate_round(debate_context)
+                    debate_results_all.append(debate_opinions)
                 # 기술적 분석 시계열 예측 CSV 저장
                 self.save_forecast_csv(technical_analyses)
                 # 이하 기존 top5 선정 및 debate/보고서/holdings 저장 로직 유지
                 symbol_scores = []
-                for i in range(len(news_analyses)):
+                for i, debate_result in enumerate(debate_results_all):
                     buy_count = 0
                     confidence_sum = 0.0
+                    # debate_result는 각 agent의 의견 리스트
+                    for agent_opinion in debate_result:
+                        if isinstance(agent_opinion, dict):
+                            if agent_opinion.get('추천') == 'BUY':
+                                buy_count += 1
+                                confidence_sum += float(agent_opinion.get('신뢰도', 0))
                     symbol_scores.append((i, buy_count, confidence_sum))
-                symbol_scores = [(i, 0, 0.0) for i in range(len(news_analyses))]
+                # BUY 개수, 신뢰도 합 기준 내림차순 정렬
+                symbol_scores.sort(key=lambda x: (x[1], x[2]), reverse=True)
                 top5 = symbol_scores[:5]
                 top5_indices = [x[0] for x in top5]
                 top5_symbols = [target_symbols_filtered[i] for i in top5_indices]
@@ -340,6 +358,8 @@ class SystemManager:
                 if code_to_name and '종목' in row:
                     code = row['종목']
                     name = code_to_name.get(code, code)
+                    if not name or name in ["", None]:
+                        name = "알 수 없음"
                     row['종목'] = f"{name} ({code})"
                 table += '| ' + ' | '.join(str(row.get(col, '')) for col in columns) + ' |\n'
             return table

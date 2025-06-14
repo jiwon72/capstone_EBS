@@ -95,6 +95,3 @@ sm.run_debate_and_decide_portfolio()
 - [API 통신 프로토콜](docs/mcp_protocol.md)
 - [테스트 가이드](docs/testing.md)
 
----
-
-문의/기여/이슈는 GitHub를 통해 남겨주세요. 

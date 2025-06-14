@@ -27,7 +27,7 @@ python-dateutil==2.8.2
 lime==0.2.0.1
 eli5==0.13.0
 matplotlib==3.8.2
-nltk==3.8.1
+nltk==3.8.1 
 FinanceDataReader==0.9.62
 vaderSentiment==3.3.2
 deep-translator==1.11.4
