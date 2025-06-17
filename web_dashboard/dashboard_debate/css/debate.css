@@ -1,0 +1,147 @@
+body {
+  margin: 0;
+  display: flex;
+  background-color: #F5F6FA;
+  font-family: 'Noto Sans KR', sans-serif;
+}
+
+.sidebar {
+  width: 265px;
+  height: 1024px;
+  background-color: #101924;
+  padding: 24px 20px;
+  box-sizing: border-box;
+}
+
+.logo {
+  color: #DBDFEA;
+  font-size: 24pt;
+  font-weight: bold;
+  margin-bottom: 20px;
+}
+
+.divider {
+  width: 100%;
+  height: 0.3px;
+  background-color: rgba(32, 50, 71, 0.7);
+  margin: 10% 0;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.report-text {
+  color: #7F8DFF;
+  font-weight: 600;
+  font-size: 14px;
+  margin-left: 6px;
+  flex-grow: 1;
+}
+
+.section-header img {
+  width: 14px;
+  height: 14px;
+}
+
+.chevron {
+  color: #7F8DFF;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.stock-list {
+  list-style: none;
+  padding-left: 16px;
+  margin-top: 10px;
+}
+
+.stock-list li {
+  color: #8094AE;
+  font-size: 15px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.stock-list li:hover {
+  color: #7F8DFF;
+  text-decoration: underline;
+}
+
+.main {
+  padding: 40px;
+  background-color: #f5f6fa;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: 1;
+}
+
+.stock-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #203247;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #f0f2f5;
+}
+
+.debate-title {
+  font-size: 20px;
+  color: #203247;
+  font-weight: 500;
+  margin-bottom: 20px;
+}
+
+/* report-box 크기 고정 및 스크롤 처리 */
+.report-box {
+  background-color: #ffffff;
+  border: 1px solid #dbdfea;
+  border-radius: 15px;
+  padding: 32px;
+  width: 1000px; /* 고정 너비 */
+  height: 750px; /* 고정 높이 */
+  box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.25);
+}
+
+/* debate-box 스타일 */
+.debate-box {
+  border: 1px solid #dbdfea;
+  border-radius: 10px;
+  background-color: #ffffff;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.08);
+  font-size: 15px;
+  color: #203247;
+  min-height: 100px;
+}
+
+/* 제목 h3 스타일 */
+.debate-box h3 {
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 12px;
+  margin-top: 0;
+}
+
+/* 텍스트 처리 */
+.debate-box p {
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: keep-all;
+}
+
+/* analysis-row 조정 */
+.analysis-row {
+  width: 100%;
+}

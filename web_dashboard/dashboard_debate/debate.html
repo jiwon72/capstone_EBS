@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>EBS 리포트</title>
+  <link rel="stylesheet" href="/dashboard_debate/css/debate.css" />
+</head>
+<body>
+  <div class="sidebar">
+    <div class="logo">EBS</div>
+    <div class="divider"></div>
+
+    <a href="/dashboard1/index.html" class="section-header" style="text-decoration: none; color: inherit;">
+      <span class="report-text">🧾 Report</span>
+      <span class="chevron">⌄</span>
+    </a>
+
+    <div class="section-header">
+      <span class="report-text">💬 Debate</span>
+      <span class="chevron">⌄</span>
+    </div>
+
+    <ul class="stock-list">
+      <!-- JS에서 동적으로 종목 삽입 -->
+    </ul>
+  </div>
+
+  <div class="main">
+    <p class="debate-title">📣 전문가 한줄 의견</p>
+    <div class="analysis-row">
+      <div class="report-box">
+        <!-- 종목명 추가 -->
+        <div class="stock-title" id="current-stock-name">종목을 선택해주세요</div>
+        
+        <!-- 순서 변경: 전략 -> 뉴스 -> 리스크 -> 기술 -->
+        <div class="debate-box">
+          <h3>📈 전략 분석</h3>
+          <p class="debate-strategy">불러오는 중...</p>
+        </div>
+        <div class="debate-box">
+          <h3>📰 뉴스/이슈 분석</h3>
+          <p class="debate-news">불러오는 중...</p>
+        </div>
+        <div class="debate-box">
+          <h3>⚠️ 리스크 분석</h3>
+          <p class="debate-risk">불러오는 중...</p>
+        </div>
+        <div class="debate-box">
+          <h3>📊 기술적 분석</h3>
+          <p class="debate-technical">불러오는 중...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/dashboard_debate/js/debate.js"></script>
+</body>
+</html>

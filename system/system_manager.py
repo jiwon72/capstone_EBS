@@ -471,6 +471,9 @@ class SystemManager:
             with open(filename, "w", encoding="utf-8") as f:
                 f.write(report_md)
             self.logger.info(f"포트폴리오 투자 분석 보고서가 {filename}에 저장되었습니다.")
+
+            from system.markdown_to_json import convert_markdown_to_json
+            convert_markdown_to_json(filename, "system/dashboard.json")
         except Exception as e:
             self.logger.error(f"투자 분석 보고서 생성 중 오류 발생: {str(e)}")
 

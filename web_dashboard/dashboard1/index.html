@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>EBS 리포트</title>
+  <link rel="stylesheet" href="/dashboard1/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="logo">EBS</div>
+    <div class="divider"></div>
+    <div class="section-header">
+      <span class="report-text">🧾 Report</span>
+      <span class="chevron">⌄</span>
+    </div>
+    <ul class="stock-list">
+      <!-- 종목코드는 JS에서 동적으로 채움 -->
+    </ul>
+    <a href="../dashboard_debate/debate.html" class="section-header" style="text-decoration: none; color: inherit;">
+      <span class="report-text">💬 Debate</span>
+      <span class="chevron">⌄</span>
+    </a>
+  </div>
+
+  <div class="main">
+    <p class="report-title">현재 00님의 투자 보고서</p>
+    <div class="report-box">
+      <div class="report-header">
+        <div class="report-title-left">
+          <div class="stock-code">-</div>
+          <div class="strategy-name">-</div>
+        </div>
+        <div class="view-all">View All</div>
+      </div>
+
+      <div class="analysis-row">
+        <div class="card">
+          <p class="card-title">📈 전략 분석</p>
+          <p class="card-text strategy-text">불러오는 중...</p>
+        </div>
+        <div class="card">
+          <p class="card-title">📰 뉴스/이슈 분석</p>
+          <!-- <p class="card-subtitle news-keyword">-</p> -->
+          <p class="card-text">
+            감성점수: <strong class="sentiment-score">-</strong> |
+            시장 영향도: <strong class="market-impact">-</strong>
+          </p>
+        </div>
+        <div class="card">
+          <p class="card-title">⚠️ 리스크 분석</p>
+          <p class="card-text">
+            리스크 레벨: <strong class="risk-level risk-grade">-</strong><br>
+            리스크 점수: <strong class="risk-score">-</strong> |
+            변동성: <strong class="volatility">-</strong>
+          </p>
+        </div>
+      </div>
+
+      <div class="analysis-row">
+        <div class="card large">
+          <p class="card-title">📊 기술적 분석</p>
+          <p class="card-text tech">
+            RSI: <strong class="rsi">-</strong> | MACD: <strong class="macd">-</strong><br>
+            볼린저밴드 상단: <strong class="bb-upper">-</strong> | 하단: <strong class="bb-lower">-</strong><br>
+            최근 종가: <strong class="close-price">-</strong>
+          </p>
+        </div>
+        <div class="card large">
+          <p class="card-title">⏱️ 시계열 분석</p>
+          <canvas id="forecastChart" class="chart" height="200"></canvas>
+        </div>
+      </div>
+
+      <div class="summary-box">
+        <p class="card-title">🗂️ 현재 포트폴리오 & 종합 의견</p>
+        <ul class="summary-content">
+          <li class="summary-text">-</li>
+        </ul>
+        <p class="card-text">
+          구매개수: <strong class="portfolio-quantity">-</strong> | 
+          투자금: <strong class="portfolio-investment">-</strong> | 
+          현재가: <strong class="portfolio-current-price">-</strong>
+        </p>
+      </div>
+    </div>
+  </div>
+  <script src="/dashboard1/js/app.js"></script>
+</body>
+</html>
